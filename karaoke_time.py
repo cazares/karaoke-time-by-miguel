@@ -13,6 +13,7 @@ def c(t, clr):
         "white": "\033[97m", "reset": "\033[0m"
     }
     return f"{d.get(clr, '')}{t}{d['reset']}"
+
 def log(m, clr="cyan", e="💬"):
     print(f"{e} {c(m, clr)}")
 
@@ -22,10 +23,9 @@ def parse_blocks(txt):
         lines = f.readlines()
     blocks = []
     for line in lines:
-        raw = line.rstrip("\n")  # keep all characters but remove end-of-line newline
-        if raw.strip() == "":  # skip empty lines entirely
+        raw = line.rstrip("\n")
+        if raw.strip() == "":
             continue
-        # keep literal "\N" intact for .ass compatibility
         blocks.append(raw.replace("\\N", "\\N"))
     return blocks
 
@@ -40,9 +40,14 @@ def log_timestamps(txt, csvf):
 
     for i, b in enumerate(blocks):
         pretty = b.replace("\\N", "\n")
-        print(c("────────────────────────────────────────────", "blue"))
-        log(f"[{i+1}/{len(blocks)}] Ready for:\n{pretty[:300]}", "white", "🎵")
-        print(c("────────────────────────────────────────────", "blue"))
+        divider = c("────────────────────────────────────────────", "blue")
+
+        print(divider)
+        log(f"[{i+1}/{len(blocks)}] Ready for:", "white", "🎵")
+        print(divider)
+        print(pretty)
+        print(divider)
+
         ui = input("> ").strip().lower()
 
         if ui == "q":
@@ -54,10 +59,9 @@ def log_timestamps(txt, csvf):
             continue
 
         t = time.time() - start
-        tstr = time.strftime("%M:%S.%02d", time.gmtime(t))
+        tstr = f"{int(t//60):02}:{t%60:05.2f}"
         ts.append((tstr, b))
-        pretty_block = b.replace("\\N", "\n")
-        log(f"✅ Captured at {tstr} for lyric:\n{pretty_block}", "green")
+        log(f"✅ Captured at {tstr} for lyric:\n{pretty}", "green")
 
     with open(csvf, "w", newline="", encoding="utf-8") as f:
         w = csv.writer(f)
@@ -92,7 +96,7 @@ Format: Layer, Start, End, Style, Text
                 ss = float(parts[0]) * 60 + float(parts[1])
             except:
                 ss = p + 3.0
-            e = ss + 3.0  # each block lasts 3s
+            e = ss + 3.0
             s_str = time.strftime("%H:%M:%S.00", time.gmtime(ss))
             e_str = time.strftime("%H:%M:%S.00", time.gmtime(e))
             txt = row["lyric"].replace("\\N", "\\N")
