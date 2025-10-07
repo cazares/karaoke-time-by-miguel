@@ -37,10 +37,13 @@ def parse_blocks(txt):
 def log_timestamps(txt, csvf):
     blocks = parse_blocks(txt)
     log(f"📄 Loaded {len(blocks)} lyric blocks from: {txt}", "magenta")
-    log("🕐 Timer started! Waiting for first ENTER…", "cyan")
-    start = time.time()
-    ts = []
 
+    # Start timer immediately
+    start = time.time()
+    log("🕐 Timer started instantly… syncing (0.5 s delay before listening)", "cyan")
+    time.sleep(0.5)  # let environment settle
+
+    ts = []
     for i, b in enumerate(blocks):
         pretty = b.replace("\\N", "\n")
         print(c("────────────────────────────────────────────", "blue"))
