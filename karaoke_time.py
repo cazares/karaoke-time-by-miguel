@@ -30,6 +30,8 @@ def parse_blocks(txt):
     return blocks
 
 # 🕐 Step 1: Interactive timestamp logger
+import os
+
 def log_timestamps(txt, csvf):
     blocks = parse_blocks(txt)
     log(f"📄 Loaded {len(blocks)} lyric lines from: {txt}", "magenta")
@@ -39,6 +41,7 @@ def log_timestamps(txt, csvf):
     ts = []
 
     for i, b in enumerate(blocks):
+        os.system("clear")  # ✅ clears terminal before showing next lyric
         pretty = b.replace("\\N", "\n")
         divider = c("────────────────────────────────────────────", "blue")
 
@@ -48,7 +51,7 @@ def log_timestamps(txt, csvf):
         print(pretty)
         print(divider)
 
-        ui = input("> ").strip().lower()
+        ui = input(c("[Press Enter to Sync @ Current Song Time] > ", "cyan")).strip().lower()
 
         if ui == "q":
             log("🟥 Quit early.", "red")
@@ -107,21 +110,28 @@ Format: Layer, Start, End, Style, Text
     log(f"📝 Wrote {len(lines)} cues → {assf}", "green")
 
 # 🎬 Step 3: ASS → MP4
+import shlex
+
 def ass_to_mp4(mp3, assf, mp4):
     if not os.path.exists(mp3):
         log(f"❌ MP3 not found: {mp3}", "red")
         return
+
+    ass_escaped = shlex.quote(assf)
+    mp3_escaped = shlex.quote(mp3)
+    mp4_escaped = shlex.quote(mp4)
+
     cmd = [
         "ffmpeg", "-y",
         "-f", "lavfi", "-i", "color=c=black:s=1920x1080:r=30",
-        "-i", mp3,
-        "-vf", f"subtitles='{assf}':fontsdir='.'",
+        "-i", mp3_escaped,
+        "-vf", f"subtitles={ass_escaped}:fontsdir='.'",
         "-c:v", "libx264", "-preset", "veryfast", "-crf", "18",
         "-c:a", "aac", "-b:a", "192k",
-        "-movflags", "+faststart", "-shortest", mp4
+        "-movflags", "+faststart", "-shortest", mp4_escaped
     ]
     log("🎬 Running ffmpeg…", "magenta")
-    subprocess.run(cmd)
+    subprocess.run(" ".join(cmd), shell=True)
     log(f"✅ Generated {mp4}", "green")
 
 # 🚀 Orchestrator
