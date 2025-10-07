@@ -22,6 +22,7 @@ def c(text, color):  # basic ANSI coloring
         "red": "\033[91m", "green": "\033[92m",
         "yellow": "\033[93m", "blue": "\033[94m",
         "magenta": "\033[95m", "cyan": "\033[96m",
+        "white": "\033[97m",
         "reset": "\033[0m"
     }
     return f"{colors.get(color, '')}{text}{colors['reset']}"
@@ -54,7 +55,7 @@ def log_timestamps(txtfile, csvfile):
     start = time.time()
 
     for i, block in enumerate(blocks):
-        log(f"[{i+1}/{len(blocks)}] Ready for: {block[:70]}...", "blue", "🎵")
+        log(f"[{i+1}/{len(blocks)}] Ready for: {block[:70]}...", "white", "🎵")
         user_input = input("> ").strip().lower()
 
         if user_input == "q":
