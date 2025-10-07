@@ -3,41 +3,48 @@
 🎤 Karaoke Time by Miguel
 Created by Miguel Cazares — https://miguelengineer.com
 """
-import os, sys, csv, time, glob, datetime, subprocess, re
+import os, sys, csv, time, glob, datetime, subprocess
 
+# 🎨 Colors + logging helper
 def c(t, clr):
-    d={"red":"\033[91m","green":"\033[92m","yellow":"\033[93m","blue":"\033[94m",
-       "magenta":"\033[95m","cyan":"\033[96m","white":"\033[97m","reset":"\033[0m"}
-    return f"{d.get(clr,'')}{t}{d['reset']}"
-def log(m,clr="cyan",e="💬"): print(f"{e} {c(m,clr)}")
+    d = {
+        "red": "\033[91m", "green": "\033[92m", "yellow": "\033[93m",
+        "blue": "\033[94m", "magenta": "\033[95m", "cyan": "\033[96m",
+        "white": "\033[97m", "reset": "\033[0m"
+    }
+    return f"{d.get(clr, '')}{t}{d['reset']}"
+def log(m, clr="cyan", e="💬"):
+    print(f"{e} {c(m, clr)}")
 
+# 🧠 DUMB PARSER: 1 line = 1 block, "\N" = line break inside the block
 def parse_blocks(txt):
-    """Read each line of the file as its own lyric block. 
-    Convert literal \N inside a line to an ASS-compatible newline."""
     with open(txt, "r", encoding="utf-8") as f:
         lines = f.readlines()
-
-    # Strip trailing whitespace but preserve intentional \N
-    blocks = [line.rstrip("\n").replace("\\N", "\\N") for line in lines if line.strip() != ""]
+    blocks = []
+    for line in lines:
+        raw = line.rstrip("\n")  # keep all characters but remove end-of-line newline
+        if raw.strip() == "":  # skip empty lines entirely
+            continue
+        # keep literal "\N" intact for .ass compatibility
+        blocks.append(raw.replace("\\N", "\\N"))
     return blocks
 
+# 🕐 Step 1: Interactive timestamp logger
 def log_timestamps(txt, csvf):
     blocks = parse_blocks(txt)
-    log(f"📄 Loaded {len(blocks)} lyric blocks from: {txt}", "magenta")
-
-    # Start timer immediately
+    log(f"📄 Loaded {len(blocks)} lyric lines from: {txt}", "magenta")
+    log("🕐 Timer started instantly… syncing (0.5s delay before listening)", "cyan")
+    time.sleep(0.5)
     start = time.time()
-    log("🕐 Timer started instantly… syncing (0.5 s delay before listening)", "cyan")
-    time.sleep(0.5)  # let environment settle
-
     ts = []
+
     for i, b in enumerate(blocks):
         pretty = b.replace("\\N", "\n")
         print(c("────────────────────────────────────────────", "blue"))
         log(f"[{i+1}/{len(blocks)}] Ready for:\n{pretty[:300]}", "white", "🎵")
         print(c("────────────────────────────────────────────", "blue"))
-
         ui = input("> ").strip().lower()
+
         if ui == "q":
             log("🟥 Quit early.", "red")
             break
@@ -58,6 +65,7 @@ def log_timestamps(txt, csvf):
         w.writerows(ts)
     log(f"💾 Saved {len(ts)} timestamps → {csvf}", "green")
 
+# 🧩 Step 2: CSV → ASS
 def csv_to_ass(csvf, assf):
     head = """[Script Info]
 Title: Karaoke by Miguel
@@ -84,7 +92,7 @@ Format: Layer, Start, End, Style, Text
                 ss = float(parts[0]) * 60 + float(parts[1])
             except:
                 ss = p + 3.0
-            e = ss + 3.0
+            e = ss + 3.0  # each block lasts 3s
             s_str = time.strftime("%H:%M:%S.00", time.gmtime(ss))
             e_str = time.strftime("%H:%M:%S.00", time.gmtime(e))
             txt = row["lyric"].replace("\\N", "\\N")
@@ -94,6 +102,7 @@ Format: Layer, Start, End, Style, Text
         f.write(head + "\n".join(lines))
     log(f"📝 Wrote {len(lines)} cues → {assf}", "green")
 
+# 🎬 Step 3: ASS → MP4
 def ass_to_mp4(mp3, assf, mp4):
     if not os.path.exists(mp3):
         log(f"❌ MP3 not found: {mp3}", "red")
@@ -104,27 +113,33 @@ def ass_to_mp4(mp3, assf, mp4):
         "-i", mp3,
         "-vf", f"subtitles='{assf}':fontsdir='.'",
         "-c:v", "libx264", "-preset", "veryfast", "-crf", "18",
-        "-c:a", "aac", "-b:a", "192k", "-movflags", "+faststart", "-shortest", mp4
+        "-c:a", "aac", "-b:a", "192k",
+        "-movflags", "+faststart", "-shortest", mp4
     ]
     log("🎬 Running ffmpeg…", "magenta")
     subprocess.run(cmd)
     log(f"✅ Generated {mp4}", "green")
 
+# 🚀 Orchestrator
 def main():
     if len(sys.argv) < 2:
         print("Usage: python3 karaoke_time.py [lyrics.txt] [--release]")
         sys.exit(1)
+
     txt = sys.argv[1]
     release = "--release" in sys.argv
     base = os.path.splitext(os.path.basename(txt))[0]
     stamp = datetime.datetime.now().strftime("%Y-%m-%d_%H%M")
     out = os.path.join(os.getcwd(), base)
     os.makedirs(out, exist_ok=True)
+
     csvf = os.path.join(out, f"{base}_{stamp}.csv")
     assf = os.path.join(out, f"{base}_{stamp}.ass")
     mp4f = os.path.join(out, f"{base}_{stamp}.mp4")
+
     mp3s = sorted(glob.glob(os.path.join(out, "*.mp3")), key=os.path.getmtime, reverse=True)
     mp3 = mp3s[0] if mp3s else None
+
     if not mp3:
         log("⚠️ No MP3 found. Drop it in folder & press ENTER.", "yellow")
         subprocess.run(["open", out])
@@ -132,9 +147,11 @@ def main():
         mp3s = sorted(glob.glob(os.path.join(out, "*.mp3")), key=os.path.getmtime, reverse=True)
         if mp3s:
             mp3 = mp3s[0]
+
     if not mp3:
         log("❌ No MP3 found. Exiting.", "red")
         sys.exit(1)
+
     log_timestamps(txt, csvf)
     csv_to_ass(csvf, assf)
     ass_to_mp4(mp3, assf, mp4f)
