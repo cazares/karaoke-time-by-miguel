@@ -3,7 +3,7 @@
 🎤 Karaoke Time by Miguel
 Created by Miguel Cazares — https://miguelengineer.com
 """
-import os, sys, csv, time, glob, datetime, subprocess, shlex
+import os, sys, csv, time, glob, datetime, subprocess, tempfile, shutil
 
 # 🎨 Colors + logging helper
 def c(t, clr):
@@ -33,7 +33,7 @@ def parse_blocks(txt):
 def log_timestamps(txt, csvf):
     blocks = parse_blocks(txt)
     log(f"📄 Loaded {len(blocks)} lyric lines from: {txt}", "magenta")
-    log("🕐 Timer started instantly… syncing (0.5s delay before listening)", "cyan")
+    log("🕐 Timer started instantly… syncing (0.5 s delay before listening)", "cyan")
     time.sleep(0.5)
     start = time.time()
     ts = []
@@ -81,7 +81,7 @@ WrapStyle: 2
 
 [V4+ Styles]
 Format: Name, Fontname, Fontsize, PrimaryColour, BackColour, Bold, Italic, Underline, StrikeOut, ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline, Shadow, Alignment, MarginL, MarginR, MarginV, Encoding
-Style: Default,Helvetica,48,&H00FFFFFF,&H00000000,0,0,0,0,100,100,0,0,1,1,0,5,50,50,50,1
+Style: Default,Helvetica,52,&H00FFFFFF,&H00000000,0,0,0,0,100,100,0,0,1,2,1,5,50,50,60,1
 
 [Events]
 Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
@@ -100,22 +100,20 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
             e = ss + 3.0
             s_str = time.strftime("%H:%M:%S.00", time.gmtime(ss))
             e_str = time.strftime("%H:%M:%S.00", time.gmtime(e))
-            # Add fade and ensure clean format
-            txt = "{\\fad(300,300)}" + row["lyric"].replace("\\N", "\\N")
+            # ✨ Smooth fade-in/out
+            txt = "{\\fad(500,500)}" + row["lyric"].replace("\\N", "\\N")
             lines.append(f"Dialogue: 0,{s_str},{e_str},Default,,0,0,0,,{txt}")
             p = ss
     with open(assf, "w", encoding="utf-8") as f:
         f.write(head + "\n".join(lines))
     log(f"📝 Wrote {len(lines)} cues → {assf}", "green")
 
-import tempfile, shutil
-
+# 🎬 Step 3: Combine MP3 + ASS → MP4 (safe temp path)
 def ass_to_mp4(mp3, assf, mp4):
     if not os.path.exists(mp3):
         log(f"❌ MP3 not found: {mp3}", "red")
         return
 
-    # Copy ASS to safe temporary path to avoid ffmpeg/libass path parsing issues
     tmpdir = tempfile.mkdtemp(prefix="karaoke_")
     safe_ass = os.path.join(tmpdir, os.path.basename(assf).replace("'", "_").replace(" ", "_"))
     shutil.copy(assf, safe_ass)
@@ -133,7 +131,6 @@ def ass_to_mp4(mp3, assf, mp4):
     log("🎬 Running ffmpeg…", "magenta")
     subprocess.run(cmd)
     log(f"✅ Generated {mp4}", "green")
-
     shutil.rmtree(tmpdir, ignore_errors=True)
 
 # 🚀 Orchestrator
@@ -143,7 +140,6 @@ def main():
         sys.exit(1)
 
     txt = sys.argv[1]
-    release = "--release" in sys.argv
     base = os.path.splitext(os.path.basename(txt))[0]
     stamp = datetime.datetime.now().strftime("%Y-%m-%d_%H%M")
     out = os.path.join(os.getcwd(), base)
