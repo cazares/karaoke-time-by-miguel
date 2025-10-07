@@ -80,11 +80,11 @@ PlayResY: 1080
 WrapStyle: 2
 
 [V4+ Styles]
-Format: Name, Fontname, Fontsize, PrimaryColour, BackColour, Bold, Italic, Alignment, MarginL, MarginR, MarginV
-Style: Default,Helvetica,48,&H00FFFFFF,&H00000000,0,0,2,50,50,70
+Format: Name, Fontname, Fontsize, PrimaryColour, BackColour, Bold, Italic, Underline, StrikeOut, ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline, Shadow, Alignment, MarginL, MarginR, MarginV, Encoding
+Style: Default,Helvetica,48,&H00FFFFFF,&H00000000,0,0,0,0,100,100,0,0,1,1,0,5,50,50,50,1
 
 [Events]
-Format: Layer, Start, End, Style, Text
+Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
 """
     lines = []
     p = 0.0
@@ -100,7 +100,7 @@ Format: Layer, Start, End, Style, Text
             e = ss + 3.0
             s_str = time.strftime("%H:%M:%S.00", time.gmtime(ss))
             e_str = time.strftime("%H:%M:%S.00", time.gmtime(e))
-            # add fade in/out tags
+            # Add fade and ensure clean format
             txt = "{\\fad(300,300)}" + row["lyric"].replace("\\N", "\\N")
             lines.append(f"Dialogue: 0,{s_str},{e_str},Default,,0,0,0,,{txt}")
             p = ss
