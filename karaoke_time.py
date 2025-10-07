@@ -108,26 +108,33 @@ Format: Layer, Start, End, Style, Text
         f.write(head + "\n".join(lines))
     log(f"📝 Wrote {len(lines)} cues → {assf}", "green")
 
+import tempfile, shutil
 
 def ass_to_mp4(mp3, assf, mp4):
     if not os.path.exists(mp3):
         log(f"❌ MP3 not found: {mp3}", "red")
         return
 
-    # fix for apostrophe in path — ffmpeg hates unescaped single quotes
-    ass_safe = assf.replace("'", "\\'")
+    # Copy ASS to safe temporary path to avoid ffmpeg/libass path parsing issues
+    tmpdir = tempfile.mkdtemp(prefix="karaoke_")
+    safe_ass = os.path.join(tmpdir, os.path.basename(assf).replace("'", "_").replace(" ", "_"))
+    shutil.copy(assf, safe_ass)
+
     cmd = [
         "ffmpeg", "-y",
         "-f", "lavfi", "-i", "color=c=black:s=1920x1080:r=30",
         "-i", mp3,
-        "-vf", f"subtitles={ass_safe}:fontsdir='.'",
+        "-vf", f"subtitles={safe_ass}:fontsdir='.'",
         "-c:v", "libx264", "-preset", "veryfast", "-crf", "18",
         "-c:a", "aac", "-b:a", "192k",
         "-movflags", "+faststart", "-shortest", mp4
     ]
+
     log("🎬 Running ffmpeg…", "magenta")
     subprocess.run(cmd)
     log(f"✅ Generated {mp4}", "green")
+
+    shutil.rmtree(tmpdir, ignore_errors=True)
 
 # 🚀 Orchestrator
 def main():
