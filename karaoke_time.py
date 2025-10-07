@@ -12,27 +12,14 @@ def c(t, clr):
 def log(m,clr="cyan",e="💬"): print(f"{e} {c(m,clr)}")
 
 def parse_blocks(txt):
+    """Read each line of the file as its own lyric block. 
+    Convert literal \N inside a line to an ASS-compatible newline."""
     with open(txt, "r", encoding="utf-8") as f:
-        raw = f.read().replace("\r\n", "\n").strip()
+        lines = f.readlines()
 
-    lines = raw.split("\n")
-    blocks, current = [], []
-
-    for line in lines:
-        if line.strip().startswith("[") and line.strip().endswith("]") and current:
-            # New section marker → start new block
-            blocks.append("\n".join(current).strip())
-            current = [line]
-        elif line.strip() == "" and current:
-            # Double newline: separate
-            blocks.append("\n".join(current).strip())
-            current = []
-        else:
-            current.append(line)
-    if current:
-        blocks.append("\n".join(current).strip())
-
-    return [b.replace("\n", "\\N") for b in blocks]
+    # Strip trailing whitespace but preserve intentional \N
+    blocks = [line.rstrip("\n").replace("\\N", "\\N") for line in lines if line.strip() != ""]
+    return blocks
 
 def log_timestamps(txt, csvf):
     blocks = parse_blocks(txt)
