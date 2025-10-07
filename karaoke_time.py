@@ -3,7 +3,7 @@
 🎤 Karaoke Time by Miguel
 Created by Miguel Cazares — https://miguelengineer.com
 """
-import os, sys, csv, time, glob, datetime, subprocess
+import os, sys, csv, time, glob, datetime, subprocess, shlex
 
 # 🎨 Colors + logging helper
 def c(t, clr):
@@ -30,8 +30,6 @@ def parse_blocks(txt):
     return blocks
 
 # 🕐 Step 1: Interactive timestamp logger
-import os
-
 def log_timestamps(txt, csvf):
     blocks = parse_blocks(txt)
     log(f"📄 Loaded {len(blocks)} lyric lines from: {txt}", "magenta")
@@ -109,9 +107,7 @@ Format: Layer, Start, End, Style, Text
         f.write(head + "\n".join(lines))
     log(f"📝 Wrote {len(lines)} cues → {assf}", "green")
 
-# 🎬 Step 3: ASS → MP4
-import shlex
-
+# 🎬 Step 3: ASS → MP4 (safe for iCloud paths with apostrophes/spaces)
 def ass_to_mp4(mp3, assf, mp4):
     if not os.path.exists(mp3):
         log(f"❌ MP3 not found: {mp3}", "red")
@@ -121,17 +117,15 @@ def ass_to_mp4(mp3, assf, mp4):
     mp3_escaped = shlex.quote(mp3)
     mp4_escaped = shlex.quote(mp4)
 
-    cmd = [
-        "ffmpeg", "-y",
-        "-f", "lavfi", "-i", "color=c=black:s=1920x1080:r=30",
-        "-i", mp3_escaped,
-        "-vf", f"subtitles={ass_escaped}:fontsdir='.'",
-        "-c:v", "libx264", "-preset", "veryfast", "-crf", "18",
-        "-c:a", "aac", "-b:a", "192k",
-        "-movflags", "+faststart", "-shortest", mp4_escaped
-    ]
+    cmd = (
+        f"ffmpeg -y -f lavfi -i color=c=black:s=1920x1080:r=30 "
+        f"-i {mp3_escaped} "
+        f"-vf subtitles={ass_escaped}:fontsdir='.' "
+        f"-c:v libx264 -preset veryfast -crf 18 "
+        f"-c:a aac -b:a 192k -movflags +faststart -shortest {mp4_escaped}"
+    )
     log("🎬 Running ffmpeg…", "magenta")
-    subprocess.run(" ".join(cmd), shell=True)
+    subprocess.run(cmd, shell=True)
     log(f"✅ Generated {mp4}", "green")
 
 # 🚀 Orchestrator
