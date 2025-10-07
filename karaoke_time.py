@@ -100,32 +100,33 @@ Format: Layer, Start, End, Style, Text
             e = ss + 3.0
             s_str = time.strftime("%H:%M:%S.00", time.gmtime(ss))
             e_str = time.strftime("%H:%M:%S.00", time.gmtime(e))
-            txt = row["lyric"].replace("\\N", "\\N")
+            # add fade in/out tags
+            txt = "{\\fad(300,300)}" + row["lyric"].replace("\\N", "\\N")
             lines.append(f"Dialogue: 0,{s_str},{e_str},Default,,0,0,0,,{txt}")
             p = ss
     with open(assf, "w", encoding="utf-8") as f:
         f.write(head + "\n".join(lines))
     log(f"📝 Wrote {len(lines)} cues → {assf}", "green")
 
-# 🎬 Step 3: ASS → MP4 (safe for iCloud paths with apostrophes/spaces)
+
 def ass_to_mp4(mp3, assf, mp4):
     if not os.path.exists(mp3):
         log(f"❌ MP3 not found: {mp3}", "red")
         return
 
-    ass_escaped = shlex.quote(assf)
-    mp3_escaped = shlex.quote(mp3)
-    mp4_escaped = shlex.quote(mp4)
-
-    cmd = (
-        f"ffmpeg -y -f lavfi -i color=c=black:s=1920x1080:r=30 "
-        f"-i {mp3_escaped} "
-        f"-vf subtitles={ass_escaped}:fontsdir='.' "
-        f"-c:v libx264 -preset veryfast -crf 18 "
-        f"-c:a aac -b:a 192k -movflags +faststart -shortest {mp4_escaped}"
-    )
+    # fix for apostrophe in path — ffmpeg hates unescaped single quotes
+    ass_safe = assf.replace("'", "\\'")
+    cmd = [
+        "ffmpeg", "-y",
+        "-f", "lavfi", "-i", "color=c=black:s=1920x1080:r=30",
+        "-i", mp3,
+        "-vf", f"subtitles={ass_safe}:fontsdir='.'",
+        "-c:v", "libx264", "-preset", "veryfast", "-crf", "18",
+        "-c:a", "aac", "-b:a", "192k",
+        "-movflags", "+faststart", "-shortest", mp4
+    ]
     log("🎬 Running ffmpeg…", "magenta")
-    subprocess.run(cmd, shell=True)
+    subprocess.run(cmd)
     log(f"✅ Generated {mp4}", "green")
 
 # 🚀 Orchestrator
