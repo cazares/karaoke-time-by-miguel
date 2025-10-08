@@ -65,7 +65,7 @@ def log_timestamps(txt, csvf):
         w.writerows(ts)
     log(f"💾 Saved {len(ts)} timestamps → {csvf}", "green")
 
-# 🧩 Step 2: CSV → ASS subtitles
+# 🧩 Step 2: CSV → ASS subtitles (instant show, fade-out only)
 def csv_to_ass(csvf, assf, offset_sec=0.0):
     head = """[Script Info]
 Title: Karaoke by Miguel
@@ -82,24 +82,28 @@ Style: Default,Helvetica,56,&H00FFFFFF,&H00000000,0,0,0,0,100,100,0,0,1,1,0,5,50
 Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
 """
     lines = []
-    p = 0.0
+    times = []
+
+    # Read all timestamps into memory first
     with open(csvf, newline="", encoding="utf-8") as f:
         r = csv.DictReader(f)
         for row in r:
-            s = row["time"]
-            parts = s.split(":")
+            parts = row["time"].split(":")
             try:
                 ss = float(parts[0]) * 60 + float(parts[1]) + offset_sec
             except:
-                ss = p + 3.0 + offset_sec
-            e = ss + 3.0
-            if ss < 0:
-                ss = 0
-            s_str = time.strftime("%H:%M:%S.00", time.gmtime(ss))
-            e_str = time.strftime("%H:%M:%S.00", time.gmtime(e))
-            txt = "{\\fad(300,300)}" + row["lyric"].replace("\\N", "\\N")
-            lines.append(f"Dialogue: 0,{s_str},{e_str},Default,,0,0,0,,{txt}")
-            p = ss
+                ss = (times[-1][0] if times else 0) + 3.0 + offset_sec
+            times.append((ss, row["lyric"]))
+
+    # Generate ASS lines with hold-until-next logic (minus 1s)
+    for i, (ss, lyric) in enumerate(times):
+        next_start = times[i + 1][0] if i + 1 < len(times) else ss + 3.0
+        e = max(next_start - 1.0, ss + 1.0)  # ensure at least 1s visible
+        s_str = time.strftime("%H:%M:%S.00", time.gmtime(ss))
+        e_str = time.strftime("%H:%M:%S.00", time.gmtime(e))
+        txt = "{\\fad(0,300)}" + lyric.replace("\\N", "\\N")
+        lines.append(f"Dialogue: 0,{s_str},{e_str},Default,,0,0,0,,{txt}")
+
     with open(assf, "w", encoding="utf-8") as f:
         f.write(head + "\n".join(lines))
     log(f"📝 Wrote {len(lines)} cues → {assf}", "green")
