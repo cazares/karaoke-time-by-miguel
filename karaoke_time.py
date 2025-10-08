@@ -17,29 +17,24 @@ def c(t, clr):
 def log(m, clr="cyan", e="💬"):
     print(f"{e} {c(m, clr)}")
 
-# 🧠 DUMB PARSER: 1 line = 1 block, "\N" = line break inside the block
+# 🧠 Dumbest possible parser — each non-empty line = one lyric block
 def parse_blocks(txt):
+    """Each non-empty line is a separate lyric block."""
     with open(txt, "r", encoding="utf-8") as f:
         lines = f.readlines()
-    blocks = []
-    for line in lines:
-        raw = line.rstrip("\n")
-        if raw.strip() == "":
-            continue
-        blocks.append(raw.replace("\\N", "\\N"))
-    return blocks
+    return [line.strip().replace("\\N", "\\N") for line in lines if line.strip()]
 
 # 🕐 Step 1: Interactive timestamp logger
 def log_timestamps(txt, csvf):
     blocks = parse_blocks(txt)
     log(f"📄 Loaded {len(blocks)} lyric lines from: {txt}", "magenta")
-    log("🕐 Timer started instantly… syncing (0.5 s delay before listening)", "cyan")
+    log("🕐 Timer started instantly… syncing (0.5s delay before listening)", "cyan")
     time.sleep(0.5)
     start = time.time()
     ts = []
 
     for i, b in enumerate(blocks):
-        os.system("clear")  # ✅ clears terminal before showing next lyric
+        os.system("clear")
         pretty = b.replace("\\N", "\n")
         divider = c("────────────────────────────────────────────", "blue")
 
@@ -70,8 +65,8 @@ def log_timestamps(txt, csvf):
         w.writerows(ts)
     log(f"💾 Saved {len(ts)} timestamps → {csvf}", "green")
 
-# 🧩 Step 2: CSV → ASS
-def csv_to_ass(csvf, assf):
+# 🧩 Step 2: CSV → ASS (with fade in/out)
+def csv_to_ass(csvf, assf, offset_sec=0.0):
     head = """[Script Info]
 Title: Karaoke by Miguel
 ScriptType: v4.00+
@@ -81,7 +76,7 @@ WrapStyle: 2
 
 [V4+ Styles]
 Format: Name, Fontname, Fontsize, PrimaryColour, BackColour, Bold, Italic, Underline, StrikeOut, ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline, Shadow, Alignment, MarginL, MarginR, MarginV, Encoding
-Style: Default,Helvetica,52,&H00FFFFFF,&H00000000,0,0,0,0,100,100,0,0,1,2,1,5,50,50,60,1
+Style: Default,Helvetica,56,&H00FFFFFF,&H00000000,0,0,0,0,100,100,0,0,1,1,0,5,50,50,70,1
 
 [Events]
 Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
@@ -94,26 +89,25 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
             s = row["time"]
             parts = s.split(":")
             try:
-                ss = float(parts[0]) * 60 + float(parts[1])
+                ss = float(parts[0]) * 60 + float(parts[1]) + offset_sec
             except:
-                ss = p + 3.0
+                ss = p + 3.0 + offset_sec
             e = ss + 3.0
+            if ss < 0: ss = 0  # avoid negative start
             s_str = time.strftime("%H:%M:%S.00", time.gmtime(ss))
             e_str = time.strftime("%H:%M:%S.00", time.gmtime(e))
-            # ✨ Smooth fade-in/out
-            txt = "{\\fad(500,500)}" + row["lyric"].replace("\\N", "\\N")
+            txt = "{\\fad(300,300)}" + row["lyric"].replace("\\N", "\\N")
             lines.append(f"Dialogue: 0,{s_str},{e_str},Default,,0,0,0,,{txt}")
             p = ss
     with open(assf, "w", encoding="utf-8") as f:
         f.write(head + "\n".join(lines))
     log(f"📝 Wrote {len(lines)} cues → {assf}", "green")
 
-# 🎬 Step 3: Combine MP3 + ASS → MP4 (safe temp path)
+# 🎬 Step 3: Render ASS → MP4
 def ass_to_mp4(mp3, assf, mp4):
     if not os.path.exists(mp3):
         log(f"❌ MP3 not found: {mp3}", "red")
         return
-
     tmpdir = tempfile.mkdtemp(prefix="karaoke_")
     safe_ass = os.path.join(tmpdir, os.path.basename(assf).replace("'", "_").replace(" ", "_"))
     shutil.copy(assf, safe_ass)
@@ -127,7 +121,6 @@ def ass_to_mp4(mp3, assf, mp4):
         "-c:a", "aac", "-b:a", "192k",
         "-movflags", "+faststart", "-shortest", mp4
     ]
-
     log("🎬 Running ffmpeg…", "magenta")
     subprocess.run(cmd)
     log(f"✅ Generated {mp4}", "green")
@@ -136,10 +129,17 @@ def ass_to_mp4(mp3, assf, mp4):
 # 🚀 Orchestrator
 def main():
     if len(sys.argv) < 2:
-        print("Usage: python3 karaoke_time.py [lyrics.txt] [--release]")
+        print("Usage: python3 karaoke_time.py [lyrics.txt] [--offset N]")
         sys.exit(1)
 
     txt = sys.argv[1]
+    offset = 0.0
+    if "--offset" in sys.argv:
+        try:
+            offset = float(sys.argv[sys.argv.index("--offset") + 1])
+        except Exception:
+            log("⚠️ Invalid offset; using 0s.", "yellow")
+
     base = os.path.splitext(os.path.basename(txt))[0]
     stamp = datetime.datetime.now().strftime("%Y-%m-%d_%H%M")
     out = os.path.join(os.getcwd(), base)
@@ -165,7 +165,7 @@ def main():
         sys.exit(1)
 
     log_timestamps(txt, csvf)
-    csv_to_ass(csvf, assf)
+    csv_to_ass(csvf, assf, offset)
     ass_to_mp4(mp3, assf, mp4f)
     log(f"🏁 Done! Files in {out}", "green")
 
