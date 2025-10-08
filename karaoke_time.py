@@ -17,9 +17,8 @@ def c(t, clr):
 def log(m, clr="cyan", e="💬"):
     print(f"{e} {c(m, clr)}")
 
-# 🧠 Dumbest possible parser — each non-empty line = one lyric block
+# 🧠 DUMB PARSER — each non-blank line is a lyric block
 def parse_blocks(txt):
-    """Each non-empty line is a separate lyric block."""
     with open(txt, "r", encoding="utf-8") as f:
         lines = f.readlines()
     return [line.strip().replace("\\N", "\\N") for line in lines if line.strip()]
@@ -28,11 +27,12 @@ def parse_blocks(txt):
 def log_timestamps(txt, csvf):
     blocks = parse_blocks(txt)
     log(f"📄 Loaded {len(blocks)} lyric lines from: {txt}", "magenta")
-    log("🕐 Timer started instantly… syncing (0.5s delay before listening)", "cyan")
-    time.sleep(0.5)
+    input(c("🎬 Ready to begin! Press ENTER when the music starts playing to start timer...", "yellow"))
     start = time.time()
-    ts = []
+    log("🕐 Timer started! 0.5s sync buffer before first lyric...", "cyan")
+    time.sleep(0.5)
 
+    ts = []
     for i, b in enumerate(blocks):
         os.system("clear")
         pretty = b.replace("\\N", "\n")
@@ -65,7 +65,7 @@ def log_timestamps(txt, csvf):
         w.writerows(ts)
     log(f"💾 Saved {len(ts)} timestamps → {csvf}", "green")
 
-# 🧩 Step 2: CSV → ASS (with fade in/out)
+# 🧩 Step 2: CSV → ASS subtitles
 def csv_to_ass(csvf, assf, offset_sec=0.0):
     head = """[Script Info]
 Title: Karaoke by Miguel
@@ -93,7 +93,8 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
             except:
                 ss = p + 3.0 + offset_sec
             e = ss + 3.0
-            if ss < 0: ss = 0  # avoid negative start
+            if ss < 0:
+                ss = 0
             s_str = time.strftime("%H:%M:%S.00", time.gmtime(ss))
             e_str = time.strftime("%H:%M:%S.00", time.gmtime(e))
             txt = "{\\fad(300,300)}" + row["lyric"].replace("\\N", "\\N")
@@ -103,7 +104,7 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
         f.write(head + "\n".join(lines))
     log(f"📝 Wrote {len(lines)} cues → {assf}", "green")
 
-# 🎬 Step 3: Render ASS → MP4
+# 🎬 Step 3: Generate MP4 via ffmpeg
 def ass_to_mp4(mp3, assf, mp4):
     if not os.path.exists(mp3):
         log(f"❌ MP3 not found: {mp3}", "red")
