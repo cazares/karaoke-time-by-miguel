@@ -5,13 +5,8 @@
 Final CLI-compatible version — October 2025
 """
 
-import argparse
-import csv
-import os
-import subprocess
-import sys
+import argparse, csv, os, subprocess, sys, platform
 from datetime import datetime
-import platform
 
 
 # =====================================================
@@ -44,7 +39,7 @@ def parse_args():
     parser.add_argument("--overlap-buffer", type=float, default=0.05,
                         help="Overlap fade buffer seconds")
 
-    # Sort for clean --help ordering
+    # sort alphabetically for --help
     parser._optionals._actions = sorted(parser._optionals._actions,
                                         key=lambda x: x.option_strings[0])
     return parser.parse_args()
@@ -63,7 +58,7 @@ PlayResY: 1080
 
 [V4+ Styles]
 Format: Name, Fontname, Fontsize, PrimaryColour, BackColour, Bold, Italic, Underline, StrikeOut, ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline, Shadow, Alignment, MarginL, MarginR, MarginV, Encoding
-Style: Default, Arial, {font_size}, &H00FFFFFF, &H00000000, 0, 0, 0, 0, 100, 100, 0, 0, 1, 2, 0, 2, 10, 10, 30, 1
+Style: Default, Helvetica, {font_size}, &H00FFFFFF, &H00000000, 0, 0, 0, 0, 100, 100, 0, 0, 1, 2, 0, 2, 10, 10, 30, 1
 
 [Events]
 Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
@@ -73,6 +68,11 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
 # =====================================================
 # Helpers
 # =====================================================
+
+def abspath(path: str) -> str:
+    """Return absolute path if relative."""
+    return os.path.abspath(path) if path else path
+
 
 def format_time(seconds: float) -> str:
     h = int(seconds // 3600)
@@ -130,11 +130,9 @@ def write_ass(lyrics, ass_path, font_size, buffer, overlap_buffer, lyric_offset)
 # =====================================================
 
 def generate_video(mp3_path, ass_path, output_prefix, offset, auto_play=False):
-    # --- output filename with timestamp ---
     date_str = datetime.now().strftime("%Y-%m-%d_%H%M")
     output_name = f"{output_prefix}{date_str}_{os.path.splitext(os.path.basename(mp3_path))[0]}.mp4"
 
-    # --- resolution detection ---
     width, height = 1920, 1080
     with open(ass_path, encoding="utf-8", errors="ignore") as f:
         for line in f:
@@ -143,41 +141,42 @@ def generate_video(mp3_path, ass_path, output_prefix, offset, auto_play=False):
             elif line.strip().startswith("PlayResY:"):
                 height = int(line.split(":")[1].strip())
 
-    # --- ffmpeg ---
+    print("\n🎬 Generating final video:", output_name)
+    print("\n⏳ Starting in:\n  3...\n  2...\n  1...\n🎵 Go!\n")
+
     cmd = [
         "ffmpeg", "-y",
         "-f", "lavfi", "-i", f"color=c=black:s={width}x{height}:r=30",
         "-itsoffset", str(offset),
         "-i", mp3_path,
-        "-vf", f"subtitles='{ass_path}':fontsdir='.'",
+        "-vf", f"subtitles={ass_path}",
         "-c:v", "libx264", "-preset", "veryfast", "-crf", "18",
         "-c:a", "aac", "-b:a", "192k",
         "-movflags", "+faststart", "-shortest",
         output_name
     ]
-    print(f"\n🎬 Generating final video: {output_name}")
     subprocess.run(cmd, check=True)
     print(f"\n✅ Done! Output saved as {output_name}")
 
-    # --- optional auto-play ---
     if auto_play and platform.system() == "Darwin":
+        print("⏸️  Pausing any active media players...")
         try:
-            # Universal pause key (pauses any player: Chrome, Spotify Web, etc.)
             subprocess.run([
                 "osascript", "-e",
                 'tell application "System Events" to key code 16 using {command down, option down}'
             ])
-        except Exception:
-            print("⚠️ Could not send global pause key event.")
+        except Exception as e:
+            print(f"⚠️ Could not send global pause key event: {e}")
 
+        print("🎞️  Opening in QuickTime...")
         try:
             subprocess.run(["open", "-a", "QuickTime Player", output_name])
             subprocess.run([
                 "osascript", "-e",
                 f'tell application "QuickTime Player" to play (first document whose name contains "{os.path.basename(output_name)}")'
             ])
-        except Exception:
-            print("⚠️ QuickTime auto-play failed (file still opened).")
+        except Exception as e:
+            print(f"⚠️ QuickTime auto-play failed: {e}")
 
 
 # =====================================================
@@ -186,6 +185,12 @@ def generate_video(mp3_path, ass_path, output_prefix, offset, auto_play=False):
 
 def main():
     args = parse_args()
+
+    # Convert all paths to absolute
+    args.csv = abspath(args.csv)
+    args.ass = abspath(args.ass)
+    args.mp3 = abspath(args.mp3)
+
     auto_play = args.auto_play and not args.no_auto_play
     lyrics = load_csv(args.csv)
     preview_csv(lyrics)
