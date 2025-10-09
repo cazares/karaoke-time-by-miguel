@@ -1,244 +1,174 @@
 #!/usr/bin/env python3
+# -*- coding: utf-8 -*-
 """
-🎤 Karaoke Time by Miguel
-Created by Miguel Cazares — https://miguelengineer.com
+karaoke_time.py — Karaoke Time lyric video generator
+Final CLI-compatible version (October 2025)
 """
-import os, sys, csv, time, glob, datetime, subprocess, tempfile, shutil
 
-# 🎨 Colors + logging helper
-def c(t, clr):
-    d = {
-        "red": "\033[91m", "green": "\033[92m", "yellow": "\033[93m",
-        "blue": "\033[94m", "magenta": "\033[95m", "cyan": "\033[96m",
-        "white": "\033[97m", "reset": "\033[0m"
-    }
-    return f"{d.get(clr, '')}{t}{d['reset']}"
+import argparse
+import csv
+import os
+import subprocess
+import sys
 
-def log(m, clr="cyan", e="💬"):
-    print(f"{e} {c(m, clr)}")
 
-# 🧠 DUMB PARSER — each non-blank line is a lyric block
-def parse_blocks(txt):
-    with open(txt, "r", encoding="utf-8") as f:
-        lines = f.readlines()
-    return [line.strip().replace("\\N", "\\N") for line in lines if line.strip()]
+# =====================================================
+# Argument parsing (alphabetically sorted)
+# =====================================================
 
-# 🕐 Step 1: Interactive timestamp logger
-def log_timestamps(txt, csvf):
-    blocks = parse_blocks(txt)
-    log(f"📄 Loaded {len(blocks)} lyric lines from: {txt}", "magenta")
-    input(c("🎬 Ready to begin! Press ENTER when the music starts playing to start timer...", "yellow"))
-    start = time.time()
-    log("🕐 Timer started! 0.5s sync buffer before first lyric...", "cyan")
-    time.sleep(0.5)
+def parse_args():
+    parser = argparse.ArgumentParser(
+        description="Karaoke Time lyric video generator",
+        formatter_class=argparse.ArgumentDefaultsHelpFormatter
+    )
 
-    ts = []
-    for i, b in enumerate(blocks):
-        os.system("clear")
-        pretty = b.replace("\\N", "\n")
-        divider = c("────────────────────────────────────────────", "blue")
+    parser.add_argument("--ass", help="ASS subtitle file path", default=None)
+    parser.add_argument("--buffer", type=float, default=0.5, help="Default fade buffer (seconds)")
+    parser.add_argument("--csv", help="CSV file path", default=None)
+    parser.add_argument("--font-size", type=int, default=52, help="Subtitle font size in points")
+    parser.add_argument("--lyric-offset", type=float, default=0.0, help="Lyric block timing offset in seconds (positive = later, negative = earlier)")
+    parser.add_argument("--mp3", help="MP3 audio file path", default=None)
+    parser.add_argument("--offset", type=float, default=0.0, help="Global audio/video offset in seconds")
+    parser.add_argument("--output-prefix", default="non_interactive_", help="Prefix for output files")
+    parser.add_argument("--overlap-buffer", type=float, default=0.05, help="Overlap buffer (seconds)")
 
-        print(divider)
-        log(f"[{i+1}/{len(blocks)}] Ready for:", "white", "🎵")
-        print(divider)
-        print(pretty)
-        print(divider)
+    # Sort args alphabetically in help output
+    parser._optionals._actions = sorted(parser._optionals._actions, key=lambda x: x.option_strings[0])
+    return parser.parse_args()
 
-        ui = input(c("[Press Enter to Sync @ Current Song Time] > ", "cyan")).strip().lower()
 
-        if ui == "q":
-            log("🟥 Quit early.", "red")
-            break
-        elif ui == "u" and ts:
-            r = ts.pop()
-            log(f"↩️ Undid {r[0]} | {r[1][:50]}", "red")
-            continue
+# =====================================================
+# ASS subtitle header
+# =====================================================
 
-        t = time.time() - start
-        tstr = f"{int(t//60):02}:{t%60:05.2f}"
-        ts.append((tstr, b))
-        log(f"✅ Captured at {tstr} for lyric:\n{pretty}", "green")
-
-    with open(csvf, "w", newline="", encoding="utf-8") as f:
-        w = csv.writer(f)
-        w.writerow(["time", "lyric"])
-        w.writerows(ts)
-    log(f"💾 Saved {len(ts)} timestamps → {csvf}", "green")
-
-# 🧩 Step 2: CSV → ASS subtitles (instant show, fade-out only)
-def csv_to_ass(csvf, assf, offset_sec=0.0):
-    head = """[Script Info]
-Title: Karaoke by Miguel
+def generate_ass_header(font_size: int):
+    return f"""[Script Info]
+Title: Karaoke Time
 ScriptType: v4.00+
-PlayResX: 1920
-PlayResY: 1080
-WrapStyle: 2
+Collisions: Normal
+PlayDepth: 0
 
 [V4+ Styles]
-Format: Name, Fontname, Fontsize, PrimaryColour, BackColour, Bold, Italic, Underline, StrikeOut, ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline, Shadow, Alignment, MarginL, MarginR, MarginV, Encoding
-Style: Default,Helvetica,56,&H00FFFFFF,&H00000000,0,0,0,0,100,100,0,0,1,1,0,5,50,50,70,1
+Format: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, OutlineColour, BackColour, Bold, Italic, Underline, StrikeOut, ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline, Shadow, Alignment, MarginL, MarginR, MarginV, Encoding
+Style: Default, Arial, {font_size}, &H00FFFFFF, &H000000FF, &H00000000, &H32000000, 0, 0, 0, 0, 100, 100, 0, 0, 1, 2, 0, 2, 10, 10, 30, 1
 
 [Events]
 Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
 """
-    lines = []
-    times = []
 
-    # Read all timestamps into memory first
-    with open(csvf, newline="", encoding="utf-8") as f:
-        r = csv.DictReader(f)
-        for row in r:
-            parts = row["time"].split(":")
-            try:
-                ss = float(parts[0]) * 60 + float(parts[1]) + offset_sec
-            except:
-                ss = (times[-1][0] if times else 0) + 3.0 + offset_sec
-            times.append((ss, row["lyric"]))
 
-    # Generate ASS lines with hold-until-next logic (minus 0.5s)
-    for i, (ss, lyric) in enumerate(times):
-        next_start = times[i + 1][0] if i + 1 < len(times) else ss + 3.0
-        e = max(next_start - 0.5, ss + 0.5)  # 500 ms visible gap
-        s_str = time.strftime("%H:%M:%S.00", time.gmtime(ss))
-        e_str = time.strftime("%H:%M:%S.00", time.gmtime(e))
-        txt = "{\\fad(0,300)}" + lyric.replace("\\N", "\\N")
-        lines.append(f"Dialogue: 0,{s_str},{e_str},Default,,0,0,0,,{txt}")
+# =====================================================
+# Time formatting helper
+# =====================================================
 
-    with open(assf, "w", encoding="utf-8") as f:
-        f.write(head + "\n".join(lines))
-    log(f"📝 Wrote {len(lines)} cues → {assf}", "green")
+def format_time(seconds: float) -> str:
+    h = int(seconds // 3600)
+    m = int((seconds % 3600) // 60)
+    s = seconds % 60
+    return f"{h:01d}:{m:02d}:{s:05.2f}"
 
-# 🎬 Step 3: Generate MP4 via ffmpeg
-def ass_to_mp4(mp3, assf, mp4):
-    if not os.path.exists(mp3):
-        log(f"❌ MP3 not found: {mp3}", "red")
-        return
-    tmpdir = tempfile.mkdtemp(prefix="karaoke_")
-    safe_ass = os.path.join(tmpdir, os.path.basename(assf).replace("'", "_").replace(" ", "_"))
-    shutil.copy(assf, safe_ass)
 
+# =====================================================
+# CSV loading + preview
+# =====================================================
+
+def load_csv(csv_path: str):
+    lyrics = []
+    with open(csv_path, "r", encoding="utf-8-sig") as f:
+        reader = csv.reader(f)
+        for row in reader:
+            if len(row) < 3:
+                continue
+            start = float(row[0].strip())
+            end = float(row[1].strip())
+            text = row[2].strip().replace("\\n", "\n")
+            lyrics.append((start, end, text))
+    return lyrics
+
+
+def preview_csv(lyrics):
+    print("\nCSV Preview (first 10 rows):")
+    print("{:<10} {:<10} {}".format("Start", "End", "Text"))
+    print("-" * 50)
+    for i, (s, e, t) in enumerate(lyrics[:10]):
+        print(f"{s:<10.2f} {e:<10.2f} {t}")
+    if len(lyrics) > 10:
+        print(f"... ({len(lyrics)} total rows)\n")
+
+
+# =====================================================
+# ASS writing (adaptive buffer, overlap handling)
+# =====================================================
+
+def write_ass(lyrics, ass_path, font_size, buffer, overlap_buffer, lyric_offset):
+    print(f"📝 Writing ASS file: {ass_path}")
+    with open(ass_path, "w", encoding="utf-8") as f:
+        f.write(generate_ass_header(font_size))
+
+        for i, (start, end, text) in enumerate(lyrics):
+            # Apply lyric offset
+            start += lyric_offset
+            end += lyric_offset
+
+            next_start = lyrics[i + 1][0] + lyric_offset if i < len(lyrics) - 1 else None
+
+            if next_start:
+                # Default 500 ms, overlap 50 ms
+                if next_start < end:
+                    adjusted_end = next_start - overlap_buffer
+                else:
+                    adjusted_end = min(end, next_start - buffer)
+            else:
+                adjusted_end = end
+
+            adjusted_end = max(adjusted_end, start)
+            f.write(f"Dialogue: 0,{format_time(start)},{format_time(adjusted_end)},Default,,0,0,0,,{text}\n")
+
+
+# =====================================================
+# FFmpeg invocation
+# =====================================================
+
+def generate_video(mp3_path, ass_path, output_prefix, offset):
+    output_name = f"{output_prefix}{os.path.splitext(os.path.basename(mp3_path))[0]}.mp4"
     cmd = [
         "ffmpeg", "-y",
-        "-f", "lavfi", "-i", "color=c=black:s=1920x1080:r=30",
-        "-i", mp3,
-        "-vf", f"subtitles={safe_ass}:fontsdir='.'",
-        "-c:v", "libx264", "-preset", "veryfast", "-crf", "18",
-        "-c:a", "aac", "-b:a", "192k",
-        "-movflags", "+faststart", "-shortest", mp4
+        "-itsoffset", str(offset),
+        "-i", mp3_path,
+        "-vf", f"ass={ass_path}",
+        "-c:a", "aac",
+        "-b:a", "192k",
+        output_name
     ]
-    log("🎬 Running ffmpeg…", "magenta")
-    subprocess.run(cmd)
-    log(f"✅ Generated {mp4}", "green")
-    shutil.rmtree(tmpdir, ignore_errors=True)
+    print(f"\n🎬 Generating final video: {output_name}")
+    subprocess.run(cmd, check=True)
+    print("\n✅ Done! Output saved as", output_name)
 
-# 🧾 Utility: display CSV in table
-def show_csv_table(csvf):
-    with open(csvf, newline="", encoding="utf-8") as f:
-        rows = list(csv.DictReader(f))
-    if not rows:
-        log("⚠️ Empty CSV.", "yellow")
-        return False
-    print(c("\n────────────────────────────────────────────", "blue"))
-    print(c(" #   TIME      LYRIC", "white"))
-    print(c("────────────────────────────────────────────", "blue"))
-    for i, r in enumerate(rows, 1):
-        print(f"{i:>2}  {r['time']:<8}  {r['lyric'][:70]}")
-    print(c("────────────────────────────────────────────\n", "blue"))
-    return True
 
-# 🚀 Orchestrator
+# =====================================================
+# Main
+# =====================================================
+
 def main():
-    args = sys.argv[1:]
-    if not args:
-        print("Usage: python3 karaoke_time.py [lyrics.txt] [--offset N] | --csv file.csv --mp3 song.mp3 | --ass file.ass --mp3 song.mp3")
+    args = parse_args()
+
+    if not args.csv or not args.ass or not args.mp3:
+        print("❌ Error: --csv, --ass, and --mp3 are required.")
         sys.exit(1)
 
-    offset = 0.0
-    if "--offset" in args:
-        try:
-            offset = float(args[args.index("--offset") + 1])
-        except Exception:
-            log("⚠️ Invalid offset; using 0s.", "yellow")
+    lyrics = load_csv(args.csv)
+    preview_csv(lyrics)
 
-    csvf = assf = mp3 = None
-    txt = None
-    non_interactive = False
+    write_ass(
+        lyrics,
+        args.ass,
+        args.font_size,
+        args.buffer,
+        args.overlap_buffer,
+        args.lyric_offset
+    )
+    generate_video(args.mp3, args.ass, args.output_prefix, args.offset)
 
-    # parse CLI
-    if "--csv" in args:
-        idx = args.index("--csv")
-        csvf = args[idx + 1] if idx + 1 < len(args) else None
-        non_interactive = True
-    if "--ass" in args:
-        idx = args.index("--ass")
-        assf = args[idx + 1] if idx + 1 < len(args) else None
-        non_interactive = True
-    if "--mp3" in args:
-        idx = args.index("--mp3")
-        mp3 = args[idx + 1] if idx + 1 < len(args) else None
-
-    # If standard lyrics file given
-    if not non_interactive:
-        txt = args[0]
-
-    base = os.path.splitext(os.path.basename(csvf or assf or txt or "output"))[0]
-    stamp = datetime.datetime.now().strftime("%Y-%m-%d_%H%M")
-    outdir = os.path.join(os.getcwd(), base)
-    os.makedirs(outdir, exist_ok=True)
-
-    # Non-interactive flow
-    if non_interactive:
-        if csvf and not os.path.exists(csvf):
-            log(f"❌ CSV not found: {csvf}", "red")
-            sys.exit(1)
-        if assf and not os.path.exists(assf):
-            log(f"❌ ASS not found: {assf}", "red")
-            sys.exit(1)
-        if not mp3 or not os.path.exists(mp3):
-            log(f"❌ MP3 not found: {mp3}", "red")
-            sys.exit(1)
-
-        if csvf:
-            show_csv_table(csvf)
-        confirm = input(c("Proceed with generating video using this data? (y/N) ", "yellow")).strip().lower()
-        if confirm != "y":
-            log("❎ Aborted by user.", "red")
-            sys.exit(0)
-
-        # If CSV → generate ASS
-        if csvf and not assf:
-            assf = os.path.join(outdir, f"non_interactive_{base}_{stamp}.ass")
-            csv_to_ass(csvf, assf, offset)
-
-        mp4f = os.path.join(outdir, f"non_interactive_{base}_{stamp}.mp4")
-        ass_to_mp4(mp3, assf, mp4f)
-        log(f"🏁 Done! Files in {outdir}", "green")
-        sys.exit(0)
-
-    # Regular interactive flow
-    csv_out = os.path.join(outdir, f"{base}_{stamp}.csv")
-    ass_out = os.path.join(outdir, f"{base}_{stamp}.ass")
-    mp4_out = os.path.join(outdir, f"{base}_{stamp}.mp4")
-
-    mp3s = sorted(glob.glob(os.path.join(outdir, "*.mp3")), key=os.path.getmtime, reverse=True)
-    mp3 = mp3s[0] if mp3s else None
-
-    if not mp3:
-        log("⚠️ No MP3 found. Drop it in folder & press ENTER.", "yellow")
-        subprocess.run(["open", outdir])
-        input()
-        mp3s = sorted(glob.glob(os.path.join(outdir, "*.mp3")), key=os.path.getmtime, reverse=True)
-        if mp3s:
-            mp3 = mp3s[0]
-
-    if not mp3:
-        log("❌ No MP3 found. Exiting.", "red")
-        sys.exit(1)
-
-    log_timestamps(txt, csv_out)
-    csv_to_ass(csv_out, ass_out, offset)
-    ass_to_mp4(mp3, ass_out, mp4_out)
-    log(f"🏁 Done! Files in {outdir}", "green")
 
 if __name__ == "__main__":
     main()
