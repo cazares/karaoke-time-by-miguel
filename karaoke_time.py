@@ -7,6 +7,10 @@ r"""
 - Validates CSV headers before proceeding.
 - Normalizes times (MM:SS.xx or seconds).
 - Uses temp copy of ASS for ffmpeg to avoid quoting bugs.
+
+last known command line usage as of 10/9 at 10:38am:
+
+python3 karaoke_time.py "$(pwd)/lyrics/lyrics_2025-10-07_2126.csv" "$(pwd)/lyrics/lyrics_2025-10-07_2126.ass" "$(pwd)/lyrics/song.mp3"
 """
 
 import os, sys, csv, time, datetime, subprocess, tempfile, shutil
