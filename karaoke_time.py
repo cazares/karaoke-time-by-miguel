@@ -4,10 +4,10 @@
 🎤 Karaoke Time by Miguel Cázares
 
 LKG one-liner (saved globally):
-    python3 karaoke_time.py "$(pwd)/lyrics/lyrics_2025-10-07_2126.csv" "$(pwd)/lyrics/lyrics_2025-10-07_2126.ass" "$(pwd)/lyrics/song.mp3" --font-size 84 --lyric-block-spacing 0.8 --offset 1.0
+    python3 karaoke_time.py "$(pwd)/lyrics/lyrics_2025-10-07_2126.csv" "$(pwd)/lyrics/lyrics_2025-10-07_2126.ass" "$(pwd)/lyrics/song.mp3" --font-size 155 --lyric-block-spacing 0.8 --offset 1.0 --autoplay
 """
 
-import argparse, csv, os, subprocess, platform
+import argparse, csv, os, subprocess, platform, tempfile
 from datetime import datetime
 
 def parse_args():
@@ -24,6 +24,7 @@ def parse_args():
     p.add_argument("--output-prefix", default="non_interactive_", help="Output filename prefix")
     p.add_argument("--pause-script", default="pause_media.applescript",
                    help="AppleScript file to pause/mute other media apps (macOS)")
+    p.add_argument("--autoplay", action="store_true", help="Automatically open the generated MP4 after creation")
     return p.parse_args()
 
 def ass_header(font_size: int) -> str:
@@ -92,7 +93,55 @@ def run_pause_script(pause_script_path: str):
         return
     subprocess.run(["osascript", pause_script_path], check=False)
 
-def generate_video(mp3_path, ass_path, prefix, offset, pause_script_path):
+def open_video_mac(path_to_mp4: str):
+    """Open MP4 in QuickTime Player, bring to front & play; fallback to Preview; finally reveal in Finder."""
+    if platform.system() != "Darwin":
+        return
+
+    path_to_mp4 = os.path.abspath(path_to_mp4)
+    applescript = f'''
+set theFile to POSIX file "{path_to_mp4}"
+
+on playWithQuickTime(theFile)
+    tell application "QuickTime Player"
+        activate
+        open theFile
+        -- wait up to ~2s for a document to appear
+        repeat 20 times
+            if (count of documents) > 0 then exit repeat
+            delay 0.1
+        end repeat
+        try
+            play document 1
+        end try
+    end tell
+end playWithQuickTime
+
+try
+    my playWithQuickTime(theFile)
+on error errMsg number errNum
+    -- Fallback to Preview if QT fails
+    tell application "Preview"
+        activate
+        open theFile
+    end tell
+end try
+'''
+    # run the script from a temp file (avoids shell quoting issues)
+    try:
+        with tempfile.NamedTemporaryFile('w', suffix='.applescript', delete=False) as f:
+            f.write(applescript)
+            script_path = f.name
+        subprocess.run(["osascript", script_path], check=False)
+    finally:
+        try: os.unlink(script_path)
+        except Exception: pass
+
+    # Last-resort: reveal in Finder if neither app comes to front
+    subprocess.run(["open", "-R", path_to_mp4], check=False)
+
+
+def generate_video(mp3_path, ass_path, prefix, offset, autoplay, pause_script_path):
     mp3_path = os.path.abspath(mp3_path)
     ass_path = os.path.abspath(ass_path)
 
@@ -116,13 +165,20 @@ def generate_video(mp3_path, ass_path, prefix, offset, pause_script_path):
     ]
     subprocess.run(cmd, check=True)
 
-    # pause/mute others (after render)
+    # Pause/mute others (AFTER render, BEFORE opening)
     run_pause_script(pause_script_path)
 
-    # reveal folder & open the new file
+    # Autoplay if requested
+    if autoplay:
+        # after ffmpeg finishes…
+        open_video_mac(out_name)
+
+    # Reveal folder & open the new file (macOS nicety)
     if platform.system() == "Darwin":
-        subprocess.run(["open", "."], check=False)  # open Finder in current dir
-        subprocess.run(["open", "-a", "QuickTime Player", out_name], check=False)
+        subprocess.run(["open", "."], check=False)
+        # If not autoplaying, still open in QuickTime for convenience
+        if not autoplay:
+            subprocess.run(["open", "-a", "QuickTime Player", out_name], check=False)
     else:
         # cross-platform best-effort
         try:
@@ -153,7 +209,7 @@ def main():
         a.lyric_block_spacing,
         a.fade_out_ms
     )
-    generate_video(a.mp3, a.ass, a.output_prefix, a.offset, a.pause_script)
+    generate_video(a.mp3, a.ass, a.output_prefix, a.offset, a.autoplay, a.pause_script)
 
 if __name__ == "__main__":
     main()
