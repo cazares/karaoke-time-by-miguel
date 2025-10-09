@@ -16,7 +16,7 @@ Example run:
 • Durations are clamped so each line stays ≥ 0.20s on screen.
 """
 
-import argparse, csv, os, subprocess
+import argparse, csv, os, platform, subprocess
 from datetime import datetime
 
 # -------------------- CLI --------------------
@@ -33,6 +33,8 @@ def parse_args():
                    help="Fade-out length in milliseconds; fade ends exactly at the line's end")
     p.add_argument("--offset", type=float, default=0.0, help="Global audio offset (sec, can be negative)")
     p.add_argument("--output-prefix", default="non_interactive_", help="Output filename prefix")
+    p.add_argument("--pause-script", default="pause_media.applescript",
+                   help="AppleScript file to pause media after encode")
     return p.parse_args()
 
 # -------------------- ASS header --------------------
@@ -64,7 +66,7 @@ def load_csv(path: str):
         for row in r:
             if not row:
                 continue
-            if len(row) == 2:  # [time, lyric] format
+            if len(row) == 2:  # [time, lyric]
                 try:
                     mm, ss = row[0].split(":")
                     start = float(mm) * 60 + float(ss)
@@ -95,17 +97,23 @@ def write_ass(rows, ass_path, font_size, buffer_sec, spacing_sec, fade_out_ms):
                 adjusted_end = next_start - spacing_sec
             else:
                 adjusted_end = end - buffer_sec
+            adjusted_end = max(adjusted_end, start + MIN_VISIBLE)  # clamp
 
-            # Clamp so each cue lasts at least MIN_VISIBLE
-            adjusted_end = max(adjusted_end, start + MIN_VISIBLE)
-
-            # Compose with fade-out that ends exactly at adjusted_end
-            # ASS \fad(0,<out_ms>) fades out over <out_ms> before the end timestamp.
             txt = "{\\fad(0," + str(max(0, int(fade_out_ms))) + ")}" + text
             f.write(f"Dialogue: 0,{fmt_time(start)},{fmt_time(adjusted_end)},Default,,0,0,0,,{txt}\n")
 
+# -------------------- pause media (simple) --------------------
+def stop_all_media_simple(script_path: str):
+    if platform.system() != "Darwin":
+        return
+    script_abs = os.path.abspath(script_path)
+    if os.path.exists(script_abs):
+        subprocess.run(["osascript", script_abs], check=False)
+    else:
+        print(f"⚠️ pause script not found: {script_abs} (skipping)")
+
 # -------------------- ffmpeg --------------------
-def generate_video(mp3_path, ass_path, prefix, offset):
+def generate_video(mp3_path, ass_path, prefix, offset, pause_script):
     mp3_path = os.path.abspath(mp3_path)
     ass_path = os.path.abspath(ass_path)
 
@@ -129,6 +137,10 @@ def generate_video(mp3_path, ass_path, prefix, offset):
         out_name
     ]
     subprocess.run(cmd, check=True)
+
+    # Pause media AFTER encode
+    stop_all_media_simple(pause_script)
+
     print(f"\n✅ Done! Output saved as {out_name}")
 
 # -------------------- main --------------------
@@ -150,7 +162,7 @@ def main():
         a.lyric_block_spacing,
         a.fade_out_ms
     )
-    generate_video(a.mp3, a.ass, a.output_prefix, a.offset)
+    generate_video(a.mp3, a.ass, a.output_prefix, a.offset, a.pause_script)
 
 if __name__ == "__main__":
     main()
