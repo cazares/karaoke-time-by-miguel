@@ -81,8 +81,7 @@ python3 karaoke_time.py "$(pwd)/lyrics/lyrics_2025-10-07_2126.csv" "$(pwd)/lyric
 ---
 
 ## 📸 Example Output
-*(Replace this with an actual screenshot or GIF preview)*  
-![Example Screenshot](docs/example.png)
+![RHCP - Californication No Vocals No Bass Guitar](https://drive.google.com/uc?export=view&id=1MyoNIjk2LskrnVm0GGYuXkutMVDuMaxe)
 
 ---
 
