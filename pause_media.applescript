@@ -1,35 +1,34 @@
--- pause_media.applescript
--- Chrome must have: View > Developer > Allow JavaScript from Apple Events
+-- pause_media.applescript (minimal)
+-- Pauses Music, Spotify, QuickTime docs, and all <video>/<audio> in Google Chrome tabs.
+-- Requirements: Chrome > View menu > Developer > ✔ Allow JavaScript from Apple Events
 
--- Music / iTunes
+-- Native players
 try
-    tell application "Music" to if it is running then pause
-end try
-try
-    tell application "iTunes" to if it is running then pause
+    tell application "Music" to pause
 end try
 
--- Spotify
 try
-    tell application "Spotify" to if it is running then pause
+    tell application "Spotify" to pause
 end try
 
--- QuickTime Player
 try
-    tell application "QuickTime Player" to if it is running then pause (every document)
-end try
-
--- Google Chrome: pause all <video>/<audio> elements in all tabs
-try
-    tell application "Google Chrome"
-        if it is running then
-            repeat with w in windows
-                repeat with t in tabs of w
-                    tell t to execute javascript ¬
-"document.querySelectorAll('video,audio').forEach(el=>{try{el.pause(); el.muted=true;}catch(e){}});"
-                end repeat
-            end repeat
-        end if
+    tell application "QuickTime Player"
+        repeat with d in documents
+            try
+                pause d
+            end try
+        end repeat
     end tell
 end try
 
+-- Chrome tabs
+try
+    tell application "Google Chrome"
+        repeat with w in windows
+            repeat with t in tabs of w
+                tell t to execute javascript ¬
+                    "document.querySelectorAll('video,audio').forEach(el=>{try{el.pause(); el.muted=true;}catch(e){}});"
+            end repeat
+        end repeat
+    end tell
+end try
