@@ -1,8 +1,6 @@
 #!/bin/zsh
 # ============================================================
 # run_karaoke.sh — CLI wrapper for Karaoke Time
-# Accepts real command-line arguments, auto-detects latest
-# lyric files, and opens the resulting .mp4 in QuickTime.
 # ============================================================
 
 set -e
@@ -14,6 +12,7 @@ OVERLAP_BUFFER=0.05
 LYRIC_OFFSET=0.0
 OFFSET=0.0
 PREFIX="non_interactive_"
+AUTO_PLAY=false
 
 # --- Parse CLI arguments ---
 while [[ $# -gt 0 ]]; do
@@ -24,28 +23,30 @@ while [[ $# -gt 0 ]]; do
     --lyric-offset) LYRIC_OFFSET="$2"; shift 2 ;;
     --offset) OFFSET="$2"; shift 2 ;;
     --prefix|--output-prefix) PREFIX="$2"; shift 2 ;;
+    --auto-play) AUTO_PLAY=true; shift ;;
+    --no-auto-play) AUTO_PLAY=false; shift ;;
     -h|--help)
       echo "Usage: $0 [options]"
       echo ""
-      echo "Options:"
-      echo "  --font-size N         Subtitle font size in points (default 52)"
-      echo "  --buffer S            Default fade buffer in seconds (default 0.5)"
-      echo "  --overlap-buffer S    Overlap fade buffer in seconds (default 0.05)"
-      echo "  --lyric-offset S      Shift all lyric blocks by S seconds (default 0.0)"
-      echo "  --offset S            Global audio/video offset (default 0.0)"
-      echo "  --prefix STR          Output filename prefix (default 'non_interactive_')"
+      echo "Options (alphabetical):"
+      echo "  --auto-play           Pause media + open video in QuickTime after render"
+      echo "  --buffer S            Default fade buffer seconds (default 0.5)"
+      echo "  --font-size N         Subtitle font size points (default 52)"
+      echo "  --lyric-offset S      Shift lyric blocks by S seconds (default 0.0)"
+      echo "  --offset S            Global A/V offset (default 0.0)"
+      echo "  --output-prefix STR   Prefix for output files (default 'non_interactive_')"
+      echo "  --overlap-buffer S    Overlap fade buffer seconds (default 0.05)"
+      echo "  --no-auto-play        Skip preview playback (default)"
       echo "  -h, --help            Show this help message"
-      exit 0
-      ;;
+      exit 0 ;;
     *)
       echo "❌ Unknown argument: $1"
       echo "Run '$0 --help' for options."
-      exit 1
-      ;;
+      exit 1 ;;
   esac
 done
 
-# --- Detect latest files ---
+# --- Detect latest lyric files ---
 lyrics_dir="lyrics"
 csv_file=$(ls -t ${lyrics_dir}/*.csv 2>/dev/null | head -1)
 ass_file=$(ls -t ${lyrics_dir}/*.ass 2>/dev/null | head -1)
@@ -68,6 +69,7 @@ echo "  Buffers:        default=${BUFFER}s, overlap=${OVERLAP_BUFFER}s"
 echo "  Lyric offset:   ${LYRIC_OFFSET}s"
 echo "  Global offset:  ${OFFSET}s"
 echo "  Prefix:         ${PREFIX}"
+echo "  Auto-play:      ${AUTO_PLAY}"
 echo "----------------------------------------------------"
 echo ""
 
@@ -81,19 +83,8 @@ python3 karaoke_time.py \
   --overlap-buffer "$OVERLAP_BUFFER" \
   --lyric-offset "$LYRIC_OFFSET" \
   --offset "$OFFSET" \
-  --output-prefix "$PREFIX"
-
-# --- Locate output video ---
-mp3_base=$(basename "$mp3_file")
-mp4_name="${PREFIX}${mp3_base%.*}.mp4"
-
-# --- Open result automatically in QuickTime (macOS only) ---
-if [[ "$OSTYPE" == "darwin"* && -f "$mp4_name" ]]; then
-  echo "🎬 Opening video in QuickTime Player..."
-  open -a "QuickTime Player" "$mp4_name"
-else
-  echo "🎬 Skipping auto-open (not macOS or file missing)."
-fi
+  --output-prefix "$PREFIX" \
+  $( [[ "$AUTO_PLAY" == true ]] && echo "--auto-play" || echo "--no-auto-play" )
 
 echo ""
 echo "✅ Karaoke video successfully generated!"

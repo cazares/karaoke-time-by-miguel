@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-karaoke_time.py — Karaoke Time lyric video generator
-Final CLI-compatible version (October 2025)
+🎤 Karaoke Time by Miguel Cázares
+Final CLI-compatible version — October 2025
 """
 
 import argparse
@@ -10,10 +10,12 @@ import csv
 import os
 import subprocess
 import sys
+from datetime import datetime
+import platform
 
 
 # =====================================================
-# Argument parsing (alphabetically sorted)
+# Argument parsing
 # =====================================================
 
 def parse_args():
@@ -22,35 +24,46 @@ def parse_args():
         formatter_class=argparse.ArgumentDefaultsHelpFormatter
     )
 
-    parser.add_argument("--ass", help="ASS subtitle file path", default=None)
-    parser.add_argument("--buffer", type=float, default=0.5, help="Default fade buffer (seconds)")
-    parser.add_argument("--csv", help="CSV file path", default=None)
-    parser.add_argument("--font-size", type=int, default=52, help="Subtitle font size in points")
-    parser.add_argument("--lyric-offset", type=float, default=0.0, help="Lyric block timing offset in seconds (positive = later, negative = earlier)")
-    parser.add_argument("--mp3", help="MP3 audio file path", default=None)
-    parser.add_argument("--offset", type=float, default=0.0, help="Global audio/video offset in seconds")
-    parser.add_argument("--output-prefix", default="non_interactive_", help="Prefix for output files")
-    parser.add_argument("--overlap-buffer", type=float, default=0.05, help="Overlap buffer (seconds)")
+    parser.add_argument("--ass", help="ASS subtitle file path", required=True)
+    parser.add_argument("--auto-play", action="store_true",
+                        help="Automatically pause media and preview video in QuickTime after generation")
+    parser.add_argument("--buffer", type=float, default=0.5,
+                        help="Default fade buffer in seconds")
+    parser.add_argument("--csv", help="CSV file path", required=True)
+    parser.add_argument("--font-size", type=int, default=52,
+                        help="Subtitle font size in points")
+    parser.add_argument("--lyric-offset", type=float, default=0.0,
+                        help="Shift all lyric blocks by N seconds (positive=later, negative=earlier)")
+    parser.add_argument("--mp3", help="MP3 audio file path", required=True)
+    parser.add_argument("--no-auto-play", action="store_true",
+                        help="Disable automatic playback after generation (default)")
+    parser.add_argument("--offset", type=float, default=0.0,
+                        help="Global audio/video offset in seconds")
+    parser.add_argument("--output-prefix", default="non_interactive_",
+                        help="Prefix for output files")
+    parser.add_argument("--overlap-buffer", type=float, default=0.05,
+                        help="Overlap fade buffer seconds")
 
-    # Sort args alphabetically in help output
-    parser._optionals._actions = sorted(parser._optionals._actions, key=lambda x: x.option_strings[0])
+    # Sort for clean --help ordering
+    parser._optionals._actions = sorted(parser._optionals._actions,
+                                        key=lambda x: x.option_strings[0])
     return parser.parse_args()
 
 
 # =====================================================
-# ASS subtitle header
+# ASS header
 # =====================================================
 
 def generate_ass_header(font_size: int):
     return f"""[Script Info]
 Title: Karaoke Time
 ScriptType: v4.00+
-Collisions: Normal
-PlayDepth: 0
+PlayResX: 1920
+PlayResY: 1080
 
 [V4+ Styles]
-Format: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, OutlineColour, BackColour, Bold, Italic, Underline, StrikeOut, ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline, Shadow, Alignment, MarginL, MarginR, MarginV, Encoding
-Style: Default, Arial, {font_size}, &H00FFFFFF, &H000000FF, &H00000000, &H32000000, 0, 0, 0, 0, 100, 100, 0, 0, 1, 2, 0, 2, 10, 10, 30, 1
+Format: Name, Fontname, Fontsize, PrimaryColour, BackColour, Bold, Italic, Underline, StrikeOut, ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline, Shadow, Alignment, MarginL, MarginR, MarginV, Encoding
+Style: Default, Arial, {font_size}, &H00FFFFFF, &H00000000, 0, 0, 0, 0, 100, 100, 0, 0, 1, 2, 0, 2, 10, 10, 30, 1
 
 [Events]
 Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
@@ -58,19 +71,15 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
 
 
 # =====================================================
-# Time formatting helper
+# Helpers
 # =====================================================
 
 def format_time(seconds: float) -> str:
     h = int(seconds // 3600)
     m = int((seconds % 3600) // 60)
     s = seconds % 60
-    return f"{h:01d}:{m:02d}:{s:05.2f}"
+    return f"{h}:{m:02d}:{s:05.2f}"
 
-
-# =====================================================
-# CSV loading + preview
-# =====================================================
 
 def load_csv(csv_path: str):
     lyrics = []
@@ -97,52 +106,78 @@ def preview_csv(lyrics):
 
 
 # =====================================================
-# ASS writing (adaptive buffer, overlap handling)
+# Write ASS with fade buffer and overlap logic
 # =====================================================
 
 def write_ass(lyrics, ass_path, font_size, buffer, overlap_buffer, lyric_offset):
     print(f"📝 Writing ASS file: {ass_path}")
     with open(ass_path, "w", encoding="utf-8") as f:
         f.write(generate_ass_header(font_size))
-
         for i, (start, end, text) in enumerate(lyrics):
-            # Apply lyric offset
             start += lyric_offset
             end += lyric_offset
-
             next_start = lyrics[i + 1][0] + lyric_offset if i < len(lyrics) - 1 else None
-
             if next_start:
-                # Default 500 ms, overlap 50 ms
-                if next_start < end:
-                    adjusted_end = next_start - overlap_buffer
-                else:
-                    adjusted_end = min(end, next_start - buffer)
+                adjusted_end = next_start - (overlap_buffer if next_start < end else buffer)
             else:
                 adjusted_end = end
-
             adjusted_end = max(adjusted_end, start)
             f.write(f"Dialogue: 0,{format_time(start)},{format_time(adjusted_end)},Default,,0,0,0,,{text}\n")
 
 
 # =====================================================
-# FFmpeg invocation
+# ffmpeg encode + optional playback
 # =====================================================
 
-def generate_video(mp3_path, ass_path, output_prefix, offset):
-    output_name = f"{output_prefix}{os.path.splitext(os.path.basename(mp3_path))[0]}.mp4"
+def generate_video(mp3_path, ass_path, output_prefix, offset, auto_play=False):
+    # --- output filename with timestamp ---
+    date_str = datetime.now().strftime("%Y-%m-%d_%H%M")
+    output_name = f"{output_prefix}{date_str}_{os.path.splitext(os.path.basename(mp3_path))[0]}.mp4"
+
+    # --- resolution detection ---
+    width, height = 1920, 1080
+    with open(ass_path, encoding="utf-8", errors="ignore") as f:
+        for line in f:
+            if line.strip().startswith("PlayResX:"):
+                width = int(line.split(":")[1].strip())
+            elif line.strip().startswith("PlayResY:"):
+                height = int(line.split(":")[1].strip())
+
+    # --- ffmpeg ---
     cmd = [
         "ffmpeg", "-y",
+        "-f", "lavfi", "-i", f"color=c=black:s={width}x{height}:r=30",
         "-itsoffset", str(offset),
         "-i", mp3_path,
-        "-vf", f"ass={ass_path}",
-        "-c:a", "aac",
-        "-b:a", "192k",
+        "-vf", f"subtitles='{ass_path}':fontsdir='.'",
+        "-c:v", "libx264", "-preset", "veryfast", "-crf", "18",
+        "-c:a", "aac", "-b:a", "192k",
+        "-movflags", "+faststart", "-shortest",
         output_name
     ]
     print(f"\n🎬 Generating final video: {output_name}")
     subprocess.run(cmd, check=True)
-    print("\n✅ Done! Output saved as", output_name)
+    print(f"\n✅ Done! Output saved as {output_name}")
+
+    # --- optional auto-play ---
+    if auto_play and platform.system() == "Darwin":
+        try:
+            # Universal pause key (pauses any player: Chrome, Spotify Web, etc.)
+            subprocess.run([
+                "osascript", "-e",
+                'tell application "System Events" to key code 16 using {command down, option down}'
+            ])
+        except Exception:
+            print("⚠️ Could not send global pause key event.")
+
+        try:
+            subprocess.run(["open", "-a", "QuickTime Player", output_name])
+            subprocess.run([
+                "osascript", "-e",
+                f'tell application "QuickTime Player" to play (first document whose name contains "{os.path.basename(output_name)}")'
+            ])
+        except Exception:
+            print("⚠️ QuickTime auto-play failed (file still opened).")
 
 
 # =====================================================
@@ -151,23 +186,13 @@ def generate_video(mp3_path, ass_path, output_prefix, offset):
 
 def main():
     args = parse_args()
-
-    if not args.csv or not args.ass or not args.mp3:
-        print("❌ Error: --csv, --ass, and --mp3 are required.")
-        sys.exit(1)
-
+    auto_play = args.auto_play and not args.no_auto_play
     lyrics = load_csv(args.csv)
     preview_csv(lyrics)
-
-    write_ass(
-        lyrics,
-        args.ass,
-        args.font_size,
-        args.buffer,
-        args.overlap_buffer,
-        args.lyric_offset
-    )
-    generate_video(args.mp3, args.ass, args.output_prefix, args.offset)
+    write_ass(lyrics, args.ass, args.font_size, args.buffer,
+              args.overlap_buffer, args.lyric_offset)
+    generate_video(args.mp3, args.ass, args.output_prefix,
+                   args.offset, auto_play=auto_play)
 
 
 if __name__ == "__main__":
