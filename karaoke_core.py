@@ -2,11 +2,8 @@
 # -*- coding: utf-8 -*-
 """
 karaoke_core.py — shared logic for Karaoke Time
-- Sensible defaults (font size, spacing, fades, etc.)
-- CSV & TXT I/O (supports "time,lyric" or "start,end,text")
-- Interactive tap-to-time
-- ASS generation
-- ffmpeg video render
+This version ensures both interactive (tap-to-time) and CSV playback sustain each lyric
+until just before the next block starts.
 """
 
 import csv, os, platform, subprocess, sys, tempfile, time
@@ -15,12 +12,12 @@ from typing import List, Tuple, Optional
 
 # Tuned defaults
 FONT_SIZE = 140
-SPACING = 0.15
-OFFSET = 1.0
+SPACING = 0.25
+OFFSET = 0.0  # Updated default (was 1.5)
 FADE_IN = 0.1
 FADE_OUT = 0.1
-BUFFER_SEC = 0.1
-OUTPUT_DIR = "lyrics/output"
+BUFFER_SEC = 0.5
+OUTPUT_DIR = "output"
 MP3_DEFAULT = "lyrics/song.mp3"
 PAUSE_SCRIPT_DEFAULT = "pause_media.applescript"
 
@@ -64,6 +61,7 @@ def parse_time_token(tok: str) -> Optional[float]:
     return None
 
 def load_csv_any(path: str) -> List[Tuple[float, float, str]]:
+    """Supports time,lyric or start,end,text formats."""
     rows: List[Tuple[float, float, str]] = []
     with open(path, "r", encoding="utf-8-sig") as f:
         r = csv.reader(f)
@@ -74,10 +72,12 @@ def load_csv_any(path: str) -> List[Tuple[float, float, str]]:
                     continue
             try:
                 if len(row) == 2:
-                    start = parse_time_token(row[0]); end = (start or 0.0) + 3.0; text = row[1]
+                    start = parse_time_token(row[0])
+                    end = start  # placeholder; real sustain computed later
+                    text = row[1]
                 else:
                     start = float(row[0]); end = float(row[1]); text = row[2]
-            except: 
+            except:
                 continue
             text = (text or "").replace("\\n", "\n")
             rows.append((float(start or 0.0), float(end), text))
@@ -88,8 +88,7 @@ def load_lyrics_txt(path: str) -> List[str]:
     with open(path, "r", encoding="utf-8") as f:
         for raw in f.read().splitlines():
             t = raw.strip()
-            if t == "": 
-                continue
+            if t == "": continue
             t = t.replace("\\n", "\n")
             texts.append(t)
     return texts
@@ -113,6 +112,7 @@ def tap_collect_times(texts: List[str], count_in_sec: float = 0.0) -> List[float
     return starts
 
 def compute_rows_from_starts(starts, texts, spacing_sec, buffer_sec):
+    """Sustains each lyric until just before next start."""
     rows = []
     for i, s in enumerate(starts):
         if i < len(starts) - 1:
