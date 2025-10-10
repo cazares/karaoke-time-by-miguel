@@ -1,83 +1,153 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
-"""
-karaoke_time.py — single entrypoint (interactive + non-interactive)
-Now uses identical sustain logic for CSV and TXT input.
-"""
-import argparse, os, sys
-from karaoke_core import (
-    FONT_SIZE, SPACING, OFFSET, FADE_IN, FADE_OUT, BUFFER_SEC, OUTPUT_DIR, MP3_DEFAULT,
-    load_csv_any, load_lyrics_txt, tap_collect_times, compute_rows_from_starts,
-    write_ass, render_video, fmt_time_mmss
-)
+import os, sys, re, html, requests
+from bs4 import BeautifulSoup
+from mutagen.id3 import ID3
 
-def parse():
-    p = argparse.ArgumentParser(description="Karaoke Time — defaults + tap-to-time")
-    p.add_argument("--csv", help="Input CSV: 'time,lyric' or 'start,end,text'")
-    p.add_argument("--lyrics-txt", help="Plain text lyrics (one block per line)")
-    p.add_argument("--ass", help="ASS output path (optional)")
-    p.add_argument("--mp3", default=MP3_DEFAULT)
-    p.add_argument("--font-size", type=int, default=FONT_SIZE)
-    p.add_argument("--lyric-block-spacing", type=float, default=SPACING)
-    p.add_argument("--offset", type=float, default=OFFSET)
-    p.add_argument("--fade-in", type=float, default=FADE_IN)
-    p.add_argument("--fade-out", type=float, default=FADE_OUT)
-    p.add_argument("--buffer", type=float, default=BUFFER_SEC)
-    p.add_argument("--output-prefix", help='Defaults: "interactive_" or "non_interactive_"')
-    p.add_argument("--output-dir", default=OUTPUT_DIR)
-    p.add_argument("--no-pause", action="store_true")
-    p.add_argument("--no-autoplay", action="store_true")
-    p.add_argument("--count-in", type=float, default=0.0)
-    p.add_argument("--export-starts-csv", help="Tap mode only: output starts-only CSV")
-    a = p.parse_args()
-    if bool(a.csv) == bool(a.lyrics_txt):
-        p.error("Provide exactly one of --csv or --lyrics-txt")
-    if a.output_prefix is None:
-        a.output_prefix = "interactive_" if a.lyrics_txt else "non_interactive_"
-    if a.ass is None:
-        base = os.path.splitext(a.lyrics_txt or a.csv)[0]
-        a.ass = base + ".ass"
-    if a.lyrics_txt and not a.export_starts_csv:
-        a.export_starts_csv = os.path.splitext(a.lyrics_txt)[0] + ".csv"
-    return a
+def sanitize_name(name):
+    return re.sub(r'[^a-zA-Z0-9]+', '_', name.strip())
 
-def main():
-    a = parse()
-    autoplay, do_pause = not a.no_autoplay, not a.no_pause
+def get_mp3_metadata(mp3_path):
+    tags = ID3(mp3_path)
+    artist = tags.get("TPE1")
+    title = tags.get("TIT2")
+    return (artist.text[0] if artist else "UnknownArtist",
+            title.text[0] if title else os.path.splitext(os.path.basename(mp3_path))[0])
 
-    if a.lyrics_txt:
-        texts = load_lyrics_txt(a.lyrics_txt)
-        starts = tap_collect_times(texts, a.count_in)
+def fetch_lyrics(artist, title):
+    """
+    Try curl-based lyrics.ovh first (with retry),
+    then fallback to Google snippet (with retry),
+    then fail explicitly.
+    """
+    base_url = f"https://api.lyrics.ovh/v1/{requests.utils.quote(artist)}/{requests.utils.quote(title)}"
 
-        lines = ["time,lyric"]
-        for s, t in zip(starts, texts):
-            escaped = t.replace("\n", "\\N")
-            lines.append(f"{fmt_time_mmss(s)},{escaped}")
+    def try_curl(url):
+        """Use curl for more reliable API access."""
+        import subprocess, json
+        try:
+            result = subprocess.run(
+                ["curl", "-s", url],
+                capture_output=True, text=True, timeout=8
+            )
+            if result.returncode == 0 and result.stdout.strip():
+                data = json.loads(result.stdout)
+                if "lyrics" in data and data["lyrics"].strip():
+                    return data["lyrics"].strip()
+        except Exception as e:
+            print(f"[warn] curl attempt failed: {e}")
+        return None
 
-        with open(a.export_starts_csv, "w", encoding="utf-8") as f:
-            f.write("\n".join(lines))
-        print("📝 Saved:", a.export_starts_csv)
+    # 1️⃣ Try curl twice
+    for attempt in range(2):
+        lyrics = try_curl(base_url)
+        if lyrics:
+            return lyrics
+        print(f"[warn] curl attempt {attempt+1} failed, retrying..." if attempt == 0 else "[error] curl failed twice")
 
-        rows = compute_rows_from_starts(starts, texts, a.lyric_block_spacing, a.buffer)
-        write_ass(rows, a.ass, a.font_size, a.buffer, a.lyric_block_spacing,
-                  int(a.fade_in * 1000), int(a.fade_out * 1000))
-        render_video(a.mp3, a.ass, a.output_prefix, a.output_dir, a.offset,
-                     autoplay, "pause_media.applescript", do_pause)
-        return
+    # 2️⃣ Try Google fallback (with retry)
+    def try_google(artist, title):
+        import html as ihtml
+        q = requests.utils.quote(f"{artist} {title} lyrics")
+        html_url = f"https://www.google.com/search?q={q}"
+        headers = {"User-Agent": "Mozilla/5.0"}
+        try:
+            r = requests.get(html_url, headers=headers, timeout=8)
+            if r.status_code == 200:
+                soup = BeautifulSoup(r.text, "html.parser")
+                blocks = soup.find_all("div", {"jsname": "YS01Ge"})
+                if blocks:
+                    return "\n".join(ihtml.unescape(b.get_text("\n")) for b in blocks)
+        except Exception as e:
+            print(f"[warn] Google attempt failed: {e}")
+        return None
 
-    rows_raw = load_csv_any(a.csv)
-    starts = [r[0] for r in rows_raw]
-    texts  = [r[2] for r in rows_raw]
-    rows = compute_rows_from_starts(starts, texts, a.lyric_block_spacing, a.buffer)
+    for attempt in range(2):
+        lyrics = try_google(artist, title)
+        if lyrics:
+            return lyrics
+        print(f"[warn] Google attempt {attempt+1} failed, retrying..." if attempt == 0 else "[error] Google failed twice")
 
-    print("🎶 CSV Preview (first 5 rows):")
-    for s, e, t in rows[:5]:
-        print(f"{s:.2f}-{e:.2f}: {t}")
+    print(f"[fatal] Could not fetch lyrics for '{artist} - {title}' after all attempts.")
+    return None
 
-    write_ass(rows, a.ass, a.font_size, a.buffer, a.lyric_block_spacing,
-              int(a.fade_in * 1000), int(a.fade_out * 1000))
-    render_video(a.mp3, a.ass, a.output_prefix, a.output_dir, a.offset,
-                 autoplay, "pause_media.applescript", do_pause)
+def prepare_song_dirs(artist, title, mp3_path):
+    base = os.path.join("songs", f"{sanitize_name(artist)}__{sanitize_name(title)}")
+    paths = {
+        "base": base,
+        "audio": os.path.join(base, "audio"),
+        "lyrics": os.path.join(base, "lyrics"),
+        "output": os.path.join(base, "output"),
+        "logs": os.path.join(base, "output", "logs"),
+    }
+    for p in paths.values():
+        os.makedirs(p, exist_ok=True)
+    return paths
 
-if __name__ == "__main__":
-    main()
+def handle_auto_lyrics(mp3_path, artist=None, title=None, lyrics_txt=None):
+    if lyrics_txt and os.path.exists(lyrics_txt):
+        print(f"✅ Using existing lyrics file: {lyrics_txt}")
+        with open(lyrics_txt, "r", encoding="utf-8") as f:
+            return f.read(), None
+
+    if not artist or not title:
+        meta_artist, meta_title = get_mp3_metadata(mp3_path)
+        artist = artist or meta_artist
+        title = title or meta_title
+
+    paths = prepare_song_dirs(artist, title, mp3_path)
+    lyrics = fetch_lyrics(artist, title)
+    if not lyrics:
+        print(f"[error] Could not fetch lyrics for '{artist} - {title}'. Please create lyrics manually.")
+        sys.exit(1)
+
+    auto_path = os.path.join(paths["lyrics"], f"auto_{sanitize_name(artist)}_{sanitize_name(title)}.txt")
+    final_path = os.path.join(paths["lyrics"], f"FINAL_{sanitize_name(artist)}_{sanitize_name(title)}.txt")
+    with open(auto_path, "w", encoding="utf-8") as f: f.write(lyrics)
+    with open(final_path, "w", encoding="utf-8") as f: f.write(lyrics)
+
+    print(f"\n✅ Lyrics fetched and saved:\n  - {auto_path}\n  - {final_path}")
+    input(f"\n📝 Please edit the FINAL_ file (insert \\N for line breaks), save, then press Enter to continue...")
+
+    with open(final_path, "r", encoding="utf-8") as f:
+        return f.read(), paths
+
+# === CLI ENTRYPOINT ===
+if __name__ == '__main__':
+    import argparse, subprocess
+
+    parser = argparse.ArgumentParser(description="Karaoke Time v3.3.4 — hybrid lyric fetcher/renderer")
+    parser.add_argument("--mp3", required=True, help="Path to MP3 file")
+    parser.add_argument("--artist", help="Artist name (optional override)")
+    parser.add_argument("--title", help="Song title (optional override)")
+    parser.add_argument("--lyrics-txt", help="Path to existing FINAL_ lyrics text (skips fetch)")
+    args = parser.parse_args()
+
+    lyrics_text, paths = handle_auto_lyrics(args.mp3, args.artist, args.title, args.lyrics_txt)
+
+    # 🪄 Friendly reminder + optional auto-run
+    if paths:
+        base = os.path.splitext(os.path.basename(args.mp3))[0]
+        final_txt_path = os.path.join(
+            paths["lyrics"],
+            f"FINAL_{sanitize_name(args.artist or 'ArtistName')}_{sanitize_name(args.title or base)}.txt"
+        )
+
+        next_cmd = [
+            "python3",
+            "karaoke_generator.py",
+            args.mp3,
+            "--artist", args.artist or "ArtistName",
+            "--title", args.title or base,
+            "--lyrics-txt", final_txt_path
+        ]
+
+        print(f"\n✅ Lyrics ready and saved in:\n   {paths['lyrics']}")
+        print(f"\n➡️  Next step:\n   {' '.join(next_cmd)}")
+
+        choice = input("\nPress [Enter] to run this now, or type 'q' to quit: ").strip().lower()
+        if choice in ("", "y", "yes"):
+            print("\n▶️ Running karaoke_generator.py...\n")
+            subprocess.run(next_cmd)
+        else:
+            print("\n👋 Exiting without running generator. You can run the above command later.")

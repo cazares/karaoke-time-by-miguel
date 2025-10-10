@@ -2,24 +2,21 @@
 # -*- coding: utf-8 -*-
 """
 karaoke_core.py — shared logic for Karaoke Time
-This version ensures both interactive (tap-to-time) and CSV playback sustain each lyric
-until just before the next block starts.
+Manual tap-to-time workflow + optional reuse of saved timings.
 """
 
-import csv, os, platform, subprocess, sys, tempfile, time
+import csv, os, subprocess, sys, time
 from datetime import datetime
 from typing import List, Tuple, Optional
 
 # Tuned defaults
 FONT_SIZE = 140
 SPACING = 0.25
-OFFSET = 0.0  # Updated default (was 1.5)
+OFFSET = 0.0
 FADE_IN = 0.1
 FADE_OUT = 0.1
 BUFFER_SEC = 0.5
 OUTPUT_DIR = "output"
-MP3_DEFAULT = "lyrics/song.mp3"
-PAUSE_SCRIPT_DEFAULT = "pause_media.applescript"
 
 def ass_header(font_size: int) -> str:
     return f"""[Script Info]
@@ -41,48 +38,6 @@ def fmt_time_ass(s: float) -> str:
     h = int(s // 3600); m = int((s % 3600) // 60); sec = s % 60
     return f"{h}:{m:02d}:{sec:05.2f}"
 
-def fmt_time_mmss(s: float) -> str:
-    if s < 0: s = 0
-    m = int(s // 60); sec = s - 60 * m
-    return f"{m:02d}:{sec:05.2f}"
-
-def parse_time_token(tok: str) -> Optional[float]:
-    tok = tok.strip()
-    if not tok: return None
-    if ":" in tok:
-        parts = tok.split(":")
-        try:
-            if len(parts) == 2: return float(parts[0]) * 60 + float(parts[1])
-            if len(parts) == 3: return float(parts[0]) * 3600 + float(parts[1]) * 60 + float(parts[2])
-        except: return None
-    else:
-        try: return float(tok)
-        except: return None
-    return None
-
-def load_csv_any(path: str) -> List[Tuple[float, float, str]]:
-    """Supports time,lyric or start,end,text formats."""
-    rows: List[Tuple[float, float, str]] = []
-    with open(path, "r", encoding="utf-8-sig") as f:
-        r = csv.reader(f)
-        for row in r:
-            if not row: continue
-            if row[0].strip().lower().startswith("time"):
-                if len(row) == 1 or (len(row) > 1 and row[1].strip().lower().startswith("lyric")):
-                    continue
-            try:
-                if len(row) == 2:
-                    start = parse_time_token(row[0])
-                    end = start  # placeholder; real sustain computed later
-                    text = row[1]
-                else:
-                    start = float(row[0]); end = float(row[1]); text = row[2]
-            except:
-                continue
-            text = (text or "").replace("\\n", "\n")
-            rows.append((float(start or 0.0), float(end), text))
-    return rows
-
 def load_lyrics_txt(path: str) -> List[str]:
     texts: List[str] = []
     with open(path, "r", encoding="utf-8") as f:
@@ -93,11 +48,9 @@ def load_lyrics_txt(path: str) -> List[str]:
             texts.append(t)
     return texts
 
-def tap_collect_times(texts: List[str], count_in_sec: float = 0.0) -> List[float]:
-    print("\nTAP-TO-TIME\n• Press Enter once per lyric.\n• First press arms the clock.\n• Type 'q' + Enter to abort.\n")
+def tap_collect_times(texts: List[str]) -> List[float]:
+    print("\n🎤 TAP-TO-TIME MODE\n• Press Enter once per lyric.\n• First press starts the clock.\n• Type 'q' + Enter to abort.\n")
     input("Ready? Press Enter to ARM the clock… ")
-    if count_in_sec > 0:
-        print(f"Counting in {count_in_sec:.2f}s…"); time.sleep(count_in_sec)
     t0 = time.perf_counter()
     starts: List[float] = []
     for idx, text in enumerate(texts, start=1):
@@ -112,7 +65,6 @@ def tap_collect_times(texts: List[str], count_in_sec: float = 0.0) -> List[float
     return starts
 
 def compute_rows_from_starts(starts, texts, spacing_sec, buffer_sec):
-    """Sustains each lyric until just before next start."""
     rows = []
     for i, s in enumerate(starts):
         if i < len(starts) - 1:
@@ -122,24 +74,59 @@ def compute_rows_from_starts(starts, texts, spacing_sec, buffer_sec):
         rows.append((s, e, texts[i]))
     return rows
 
-def write_ass(rows, ass_path, font_size, buffer_sec, spacing_sec, fade_in_ms, fade_out_ms):
+def write_ass(rows, ass_path, font_size, fade_in_ms, fade_out_ms):
     print(f"📝 Writing ASS: {ass_path}")
     with open(ass_path, "w", encoding="utf-8") as f:
         f.write(ass_header(font_size))
-        for i, (start, end, text) in enumerate(rows):
+        for (start, end, text) in rows:
             text = f"{{\\fad({fade_in_ms},{fade_out_ms})}}{text}"
             f.write(f"Dialogue: 0,{fmt_time_ass(start)},{fmt_time_ass(end)},Default,,0,0,0,,{text}\n")
 
 def ensure_dir(path): os.makedirs(path, exist_ok=True)
 
-def render_video(mp3_path, ass_path, prefix, out_dir, offset, autoplay, pause_script_path, do_pause):
+def render_video(mp3_path, ass_path, prefix, out_dir):
     ensure_dir(out_dir)
     stamp = datetime.now().strftime("%Y-%m-%d_%H%M")
     base = os.path.splitext(os.path.basename(mp3_path))[0]
     out_name = f"{prefix}{stamp}_{base}.mp4"
     out_path = os.path.join(out_dir, out_name)
 
-    # ✅ Create black background video, overlay lyrics, and sync with audio
+    # ✅ Lyric + Timing Workflow
+    txt_path = ass_path
+    ass_path = os.path.splitext(txt_path)[0] + ".ass"
+    csv_path = os.path.join(os.path.dirname(txt_path), "lyrics_timing.csv")
+    texts = load_lyrics_txt(txt_path)
+
+    # ⏱ Reuse if available
+    if os.path.exists(csv_path):
+        choice = input(f"\n🟡 Detected existing timing file:\n   {csv_path}\nReuse it? (Y/n): ").strip().lower()
+        if choice in ("", "y", "yes"):
+            starts = []
+            with open(csv_path, "r", encoding="utf-8") as f:
+                next(f)  # skip header
+                for line in csv.reader(f):
+                    try:
+                        starts.append(float(line[0]))
+                    except:
+                        continue
+            print(f"✅ Reused {len(starts)} timestamps from previous run.")
+        else:
+            starts = tap_collect_times(texts)
+    else:
+        starts = tap_collect_times(texts)
+
+    # 💾 Always save the timings
+    with open(csv_path, "w", encoding="utf-8", newline="") as f:
+        writer = csv.writer(f)
+        writer.writerow(["StartTime(sec)", "Lyric"])
+        for s, lyric in zip(starts, texts):
+            writer.writerow([f"{s:.3f}", lyric])
+    print(f"💾 Saved tapped timings to: {csv_path}")
+
+    rows = compute_rows_from_starts(starts, texts, SPACING, BUFFER_SEC)
+    write_ass(rows, ass_path, FONT_SIZE, int(FADE_IN * 1000), int(FADE_OUT * 1000))
+
+    # ✅ Render with ffmpeg
     subprocess.run([
         "ffmpeg", "-y",
         "-f", "lavfi", "-i", "color=c=black:s=1920x1080:r=30",
@@ -147,14 +134,29 @@ def render_video(mp3_path, ass_path, prefix, out_dir, offset, autoplay, pause_sc
         "-vf", f"ass={ass_path}",
         "-map", "0:v:0",
         "-map", "1:a:0",
-        "-c:v", "libx264",
-        "-preset", "fast",
-        "-tune", "stillimage",
-        "-c:a", "aac",
-        "-b:a", "192k",
-        "-shortest",
-        "-movflags", "+faststart",
+        "-c:v", "libx264", "-preset", "fast", "-tune", "stillimage",
+        "-c:a", "aac", "-b:a", "192k",
+        "-shortest", "-movflags", "+faststart",
         str(out_path)
     ], check=True)
 
-    print(f"✅ Rendered: {out_path}")
+    print(f"\n✅ Rendered: {out_path}")
+
+# === CLI ENTRY ===
+if __name__ == "__main__":
+    import argparse
+    parser = argparse.ArgumentParser(description="Render karaoke video with optional reused timing CSV")
+    parser.add_argument("--lyrics-txt", required=True, help="Path to FINAL_ lyrics file")
+    parser.add_argument("--mp3", required=True, help="Path to MP3 file")
+    parser.add_argument("--prefix", default="non_interactive_", help="Output filename prefix")
+    parser.add_argument("--out-dir", default="output", help="Output directory")
+    args = parser.parse_args()
+
+    try:
+        render_video(args.mp3, args.lyrics_txt, args.prefix, args.out_dir)
+    except subprocess.CalledProcessError as e:
+        print(f"\n❌ ffmpeg failed with error: {e}")
+        sys.exit(1)
+    except Exception as e:
+        print(f"\n⚠️ Unexpected error: {e}")
+        sys.exit(1)
