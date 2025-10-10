@@ -3,22 +3,25 @@
 # 🎤 Karaoke Vocal Remover (FFmpeg)
 # by Miguel Cázares 🎸
 # -------------------------------------------------------------
-# Removes or reduces vocals from a song using only ffmpeg filters.
-# Designed for living-room karaoke: clean, simple, and fast.
+# Removes or reduces vocals from any MP3 and optionally diagnoses
+# channel balance / stereo width automatically.
 #
-# Levels of vocal removal:
-#   0 → Least aggressive  | Keeps song full and natural; vocals still present
-#   1 → Light reduction   | Lowers vocals slightly; subtle karaoke feel
-#   2 → Mild removal      | Noticeably reduces vocals; keeps musical body
-#   3 → Balanced (default)| Great overall karaoke balance
-#   4 → Aggressive        | Strong vocal removal; thinner mix
-#   5 → Maximum           | Mono mix; highest removal but flattest sound
+# USAGE:
+#   ./karaoke_strip.sh "Song.mp3" [options]
 #
-# Usage Examples:
-#   ./karaoke_strip.sh "Song.mp3"
-#   ./karaoke_strip.sh "Song.mp3" --vocal-strip-level 4
-#   ./karaoke_strip.sh "Song.mp3" --all-levels
-#   ./karaoke_strip.sh -h
+# OPTIONS:
+#   --vocal-strip-level [0–5]   Process one aggressiveness level (default: 3)
+#   --all-levels                Generate all 0–5 levels
+#   --diagnostic                Run full analysis and output multiple variants
+#   -h, --help                  Show help and usage info
+#
+# LEVEL MEANINGS:
+#   0 → Least aggressive  | Natural, vocals intact
+#   1 → Light reduction   | Subtle karaoke feel
+#   2 → Mild removal      | Balanced reduction
+#   3 → Balanced default  | Ideal for most songs
+#   4 → Aggressive        | Stronger vocal cut, thinner
+#   5 → Maximum removal   | Mono, near-complete cancel (flat)
 # =============================================================
 
 set -e
@@ -27,36 +30,27 @@ show_help() {
   echo ""
   echo "🎤 Karaoke Vocal Remover (FFmpeg)"
   echo "----------------------------------------"
-  echo "Removes vocals from any stereo MP3 to make karaoke tracks."
-  echo ""
   echo "Usage:"
   echo "  ./karaoke_strip.sh \"input.mp3\" [options]"
   echo ""
   echo "Options:"
-  echo "  --vocal-strip-level [0–5]   Process one aggressiveness level (default: 3)"
-  echo "  --all-levels                Generate all levels 0–5 for A/B testing"
+  echo "  --vocal-strip-level [0–5]   Process a specific level (default: 3)"
+  echo "  --all-levels                Generate all six levels (0–5)"
+  echo "  --diagnostic                Run channel analysis + all levels + widened mix"
   echo "  -h, --help                  Show this help message"
   echo ""
-  echo "Levels of vocal removal:"
-  echo "  0 → Least aggressive  | Full original sound; vocals mostly intact"
-  echo "  1 → Light reduction   | Vocals softened slightly"
-  echo "  2 → Mild removal      | Balanced karaoke sound, minimal artifacts"
-  echo "  3 → Balanced default  | Ideal mix for most songs"
-  echo "  4 → Aggressive        | Strong vocal removal, some thinness"
-  echo "  5 → Maximum removal   | Mono mix, vocals nearly gone"
-  echo ""
-  echo "Examples:"
-  echo "  ./karaoke_strip.sh \"Californication.mp3\""
-  echo "  ./karaoke_strip.sh \"Californication.mp3\" --vocal-strip-level 4"
-  echo "  ./karaoke_strip.sh \"Californication.mp3\" --all-levels"
-  echo ""
-  echo "Output Files:"
-  echo "  input_karaoke_L#.mp3  → one per chosen level"
+  echo "Each level removes vocals with increasing aggressiveness:"
+  echo "  0 → Least aggressive  | Keeps natural sound, vocals mostly intact"
+  echo "  1 → Light reduction   | Vocals slightly reduced"
+  echo "  2 → Mild removal      | Noticeable reduction, balanced tone"
+  echo "  3 → Balanced default  | Ideal karaoke mix (recommended)"
+  echo "  4 → Aggressive        | Strong vocal removal, thinner mix"
+  echo "  5 → Maximum removal   | Mono, highest removal, flat sound"
   echo ""
   exit 0
 }
 
-# --- Show help if requested or missing input ---
+# --- Help ---
 if [[ "$1" == "--help" || "$1" == "-h" || -z "$1" ]]; then
   show_help
 fi
@@ -65,18 +59,19 @@ INPUT="$1"
 EXT="${INPUT##*.}"
 BASENAME="$(basename "$INPUT" .${EXT})"
 
-# --- Default parameters ---
 LEVEL=3
 RUN_ALL=false
+DIAG=false
 
-# --- Parse optional flags ---
 if [[ "$2" == "--vocal-strip-level" && "$3" =~ ^[0-9]+$ ]]; then
   LEVEL=$3
 elif [[ "$2" == "--all-levels" ]]; then
   RUN_ALL=true
+elif [[ "$2" == "--diagnostic" ]]; then
+  DIAG=true
 fi
 
-# --- Define filter bank function ---
+# --- Filter presets ---
 get_filter_for_level() {
   local L=$1
   case $L in
@@ -90,24 +85,60 @@ get_filter_for_level() {
   esac
 }
 
-# --- Process one or all ---
 process_level() {
   local L=$1
   local FILTER
   FILTER=$(get_filter_for_level "$L")
   local OUTPUT="${BASENAME}_karaoke_L${L}.mp3"
-  echo "🎧 Processing level $L ..."
+  echo "🎧 Level $L ..."
   ffmpeg -loglevel error -i "$INPUT" -af "$FILTER" -y "$OUTPUT"
   echo "✅ Created: $OUTPUT"
 }
 
-# --- Run ---
-if [ "$RUN_ALL" = true ]; then
+diagnostic_mode() {
+  echo "🔍 Running diagnostic mode..."
+  echo "--------------------------------------------"
+  
+  # --- Channel info ---
+  echo "📊 Channel analysis:"
+  ffprobe -hide_banner -show_streams -select_streams a:0 -i "$INPUT" | grep -E "codec_name|channels|sample_rate|bit_rate"
+  ffprobe -hide_banner -show_streams -select_streams a:0 -i "$INPUT" > "${BASENAME}_diagnostic.txt" 2>/dev/null
+  echo "📝 Saved detailed report: ${BASENAME}_diagnostic.txt"
+  echo ""
+
+  # --- Generate all 0–5 ---
+  echo "🎶 Generating levels 0–5..."
+  for L in 0 1 2 3 4 5; do
+    process_level "$L"
+  done
+
+  # --- Widened variant for near-mono mixes ---
+  echo ""
+  echo "🔊 Creating stereo-widened version (for mono-heavy songs)..."
+  WIDE_FILTER="stereotools=balance_in=0.2:balance_out=0.8,pan=stereo|c0=0.8*c0-0.8*c1|c1=0.8*c1-0.8*c0,highpass=f=120,lowpass=f=10000,volume=2.0"
+  WIDE_OUTPUT="${BASENAME}_karaoke_widened.mp3"
+  ffmpeg -loglevel error -i "$INPUT" -af "$WIDE_FILTER" -y "$WIDE_OUTPUT"
+  echo "✅ Created widened stereo variant: $WIDE_OUTPUT"
+
+  echo ""
+  echo "--------------------------------------------"
+  echo "✅ Diagnostic mode complete."
+  echo "Compare these output files:"
+  echo "  - ${BASENAME}_karaoke_L0.mp3  through  L5.mp3"
+  echo "  - ${BASENAME}_karaoke_widened.mp3"
+  echo "  - ${BASENAME}_diagnostic.txt (audio info)"
+  echo ""
+}
+
+# --- Main execution ---
+if [ "$DIAG" = true ]; then
+  diagnostic_mode
+elif [ "$RUN_ALL" = true ]; then
   echo "🎶 Generating all karaoke levels (0–5)..."
   for L in 0 1 2 3 4 5; do
     process_level "$L"
   done
-  echo "🎤 Done! Compare each _karaoke_L#.mp3 and pick your favorite."
+  echo "✅ Done!"
 else
   process_level "$LEVEL"
 fi
