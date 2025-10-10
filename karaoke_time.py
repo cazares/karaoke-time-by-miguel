@@ -2,11 +2,14 @@
 # -*- coding: utf-8 -*-
 """
 karaoke_time.py — single entrypoint (interactive + non-interactive)
+Now uses identical sustain logic for CSV and TXT input.
 """
 import argparse, os, sys
-from karaoke_core import (FONT_SIZE, SPACING, OFFSET, FADE_IN, FADE_OUT, BUFFER_SEC, OUTPUT_DIR, MP3_DEFAULT,
-                          load_csv_any, load_lyrics_txt, tap_collect_times, compute_rows_from_starts,
-                          write_ass, render_video, fmt_time_mmss)
+from karaoke_core import (
+    FONT_SIZE, SPACING, OFFSET, FADE_IN, FADE_OUT, BUFFER_SEC, OUTPUT_DIR, MP3_DEFAULT,
+    load_csv_any, load_lyrics_txt, tap_collect_times, compute_rows_from_starts,
+    write_ass, render_video, fmt_time_mmss
+)
 
 def parse():
     p = argparse.ArgumentParser(description="Karaoke Time — defaults + tap-to-time")
@@ -56,30 +59,26 @@ def main():
         print("📝 Saved:", a.export_starts_csv)
 
         rows = compute_rows_from_starts(starts, texts, a.lyric_block_spacing, a.buffer)
-        write_ass(
-            rows, a.ass, a.font_size, a.buffer, a.lyric_block_spacing,
-            int(a.fade_in * 1000), int(a.fade_out * 1000)
-        )
-        render_video(
-            a.mp3, a.ass, a.output_prefix, a.output_dir, a.offset,
-            autoplay, "pause_media.applescript", do_pause
-        )
+        write_ass(rows, a.ass, a.font_size, a.buffer, a.lyric_block_spacing,
+                  int(a.fade_in * 1000), int(a.fade_out * 1000))
+        render_video(a.mp3, a.ass, a.output_prefix, a.output_dir, a.offset,
+                     autoplay, "pause_media.applescript", do_pause)
         return
 
     # Non-interactive CSV mode
-    rows = load_csv_any(a.csv)
+    rows_raw = load_csv_any(a.csv)
+    starts = [r[0] for r in rows_raw]
+    texts  = [r[2] for r in rows_raw]
+    rows = compute_rows_from_starts(starts, texts, a.lyric_block_spacing, a.buffer)
+
     print("🎶 CSV Preview (first 5 rows):")
     for s, e, t in rows[:5]:
         print(f"{s:.2f}-{e:.2f}: {t}")
 
-    write_ass(
-        rows, a.ass, a.font_size, a.buffer, a.lyric_block_spacing,
-        int(a.fade_in * 1000), int(a.fade_out * 1000)
-    )
-    render_video(
-        a.mp3, a.ass, a.output_prefix, a.output_dir, a.offset,
-        autoplay, "pause_media.applescript", do_pause
-    )
+    write_ass(rows, a.ass, a.font_size, a.buffer, a.lyric_block_spacing,
+              int(a.fade_in * 1000), int(a.fade_out * 1000))
+    render_video(a.mp3, a.ass, a.output_prefix, a.output_dir, a.offset,
+                 autoplay, "pause_media.applescript", do_pause)
 
 if __name__ == "__main__":
     main()
