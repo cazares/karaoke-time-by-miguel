@@ -97,13 +97,30 @@ def render_video(mp3_path, ass_path, prefix, out_dir):
     csv_path = os.path.join(os.path.dirname(txt_path), "lyrics_timing.csv")
     texts = load_lyrics_txt(txt_path)
 
+    # 🎵 Insert title card at the beginning (smart parsing)
+    filename = os.path.splitext(os.path.basename(txt_path))[0]
+    filename = filename.replace("FINAL_", "").replace("auto_", "")
+    artist_clean = "Unknown Artist"
+    title_clean = filename.replace("_", " ").strip()
+
+    # Prefer directory-based naming (Artist__Title)
+    parent_dir = os.path.basename(os.path.dirname(txt_path))
+    if "__" in parent_dir:
+        parts = parent_dir.split("__", 1)
+        if len(parts) == 2:
+            artist_clean = parts[0].replace("_", " ").strip()
+            title_clean = parts[1].replace("_", " ").strip()
+
+    intro_block = f"{title_clean}\\N\\Nby\\N\\N{artist_clean}"
+    texts.insert(0, intro_block)
+
     # ⏱ Reuse if available
     if os.path.exists(csv_path):
         choice = input(f"\n🟡 Detected existing timing file:\n   {csv_path}\nReuse it? (Y/n): ").strip().lower()
         if choice in ("", "y", "yes"):
             starts = []
             with open(csv_path, "r", encoding="utf-8") as f:
-                next(f)  # skip header
+                next(f)
                 for line in csv.reader(f):
                     try:
                         starts.append(float(line[0]))
@@ -144,16 +161,35 @@ def render_video(mp3_path, ass_path, prefix, out_dir):
 
 # === CLI ENTRY ===
 if __name__ == "__main__":
-    import argparse
+    import argparse, subprocess
+
     parser = argparse.ArgumentParser(description="Render karaoke video with optional reused timing CSV")
     parser.add_argument("--lyrics-txt", required=True, help="Path to FINAL_ lyrics file")
     parser.add_argument("--mp3", required=True, help="Path to MP3 file")
     parser.add_argument("--prefix", default="non_interactive_", help="Output filename prefix")
     parser.add_argument("--out-dir", default="output", help="Output directory")
+    parser.add_argument("--autoplay", action="store_true", help="Automatically open the rendered video")
     args = parser.parse_args()
 
     try:
         render_video(args.mp3, args.lyrics_txt, args.prefix, args.out_dir)
+        print(f"\n✅ Render complete!")
+
+        # === Optional autoplay ===
+        if args.autoplay:
+            out_dir_abs = os.path.abspath(args.out_dir)
+            newest = max(
+                (os.path.join(out_dir_abs, f) for f in os.listdir(out_dir_abs)),
+                key=os.path.getmtime,
+            )
+            print(f"🎬 Autoplay: {newest}")
+            try:
+                subprocess.run(["open", "-a", "QuickTime Player", newest])
+            except Exception:
+                try:
+                    subprocess.run(["open", "-a", "Preview", newest])
+                except Exception:
+                    subprocess.run(["open", "-R", newest])
     except subprocess.CalledProcessError as e:
         print(f"\n❌ ffmpeg failed with error: {e}")
         sys.exit(1)
