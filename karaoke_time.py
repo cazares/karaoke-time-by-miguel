@@ -4,7 +4,7 @@
 karaoke_time.py — single entrypoint (interactive + non-interactive)
 Now uses identical sustain logic for CSV and TXT input.
 """
-import argparse, os, sys, datetime
+import argparse, os, sys
 from karaoke_core import (
     FONT_SIZE, SPACING, OFFSET, FADE_IN, FADE_OUT, BUFFER_SEC, OUTPUT_DIR, MP3_DEFAULT,
     load_csv_any, load_lyrics_txt, tap_collect_times, compute_rows_from_starts,
@@ -30,23 +30,15 @@ def parse():
     p.add_argument("--count-in", type=float, default=0.0)
     p.add_argument("--export-starts-csv", help="Tap mode only: output starts-only CSV")
     a = p.parse_args()
-
     if bool(a.csv) == bool(a.lyrics_txt):
         p.error("Provide exactly one of --csv or --lyrics-txt")
-
     if a.output_prefix is None:
         a.output_prefix = "interactive_" if a.lyrics_txt else "non_interactive_"
-
     if a.ass is None:
         base = os.path.splitext(a.lyrics_txt or a.csv)[0]
         a.ass = base + ".ass"
-
-    # timestamp-safe CSV export naming
     if a.lyrics_txt and not a.export_starts_csv:
-        ts = datetime.datetime.now().strftime("%Y-%m-%d_%H%M%S")
-        base = os.path.splitext(a.lyrics_txt)[0]
-        a.export_starts_csv = f"{base}_{ts}.csv"
-
+        a.export_starts_csv = os.path.splitext(a.lyrics_txt)[0] + ".csv"
     return a
 
 def main():
@@ -73,7 +65,6 @@ def main():
                      autoplay, "pause_media.applescript", do_pause)
         return
 
-    # Non-interactive CSV mode
     rows_raw = load_csv_any(a.csv)
     starts = [r[0] for r in rows_raw]
     texts  = [r[2] for r in rows_raw]

@@ -138,10 +138,23 @@ def render_video(mp3_path, ass_path, prefix, out_dir, offset, autoplay, pause_sc
     base = os.path.splitext(os.path.basename(mp3_path))[0]
     out_name = f"{prefix}{stamp}_{base}.mp4"
     out_path = os.path.join(out_dir, out_name)
-    vf = f"subtitles='{ass_path}'"
-    cmd = ["ffmpeg", "-y", "-f", "lavfi", "-i", "color=c=black:s=1920x1080:r=30",
-           "-itsoffset", str(offset), "-i", mp3_path,
-           "-vf", vf, "-c:v", "libx264", "-preset", "veryfast", "-crf", "18",
-           "-c:a", "aac", "-b:a", "192k", "-movflags", "+faststart", "-shortest", out_path]
-    subprocess.run(cmd, check=True)
+
+    # ✅ Create black background video, overlay lyrics, and sync with audio
+    subprocess.run([
+        "ffmpeg", "-y",
+        "-f", "lavfi", "-i", "color=c=black:s=1920x1080:r=30",
+        "-i", str(mp3_path),
+        "-vf", f"ass={ass_path}",
+        "-map", "0:v:0",
+        "-map", "1:a:0",
+        "-c:v", "libx264",
+        "-preset", "fast",
+        "-tune", "stillimage",
+        "-c:a", "aac",
+        "-b:a", "192k",
+        "-shortest",
+        "-movflags", "+faststart",
+        str(out_path)
+    ], check=True)
+
     print(f"✅ Rendered: {out_path}")
