@@ -3,7 +3,7 @@
 """
 karaoke_generator.py — fully automated Karaoke pipeline 🎤
 Author: Miguel Cázares
-Version: 2.0
+Version: 2.1
 ----------------------------------------------------------
 Usage Examples:
   python3 karaoke_generator.py ricky_lyrics.txt
@@ -13,6 +13,7 @@ Flow:
 1️⃣ Captures lyric timings interactively using the original song (lyrics.txt + song.mp3)
 2️⃣ Immediately generates karaoke video using the instrumental version (instrumental.mp3)
 3️⃣ Auto-detects matching MP3s based on filename patterns
+4️⃣ Opens Finder at the end for convenience
 """
 
 import subprocess, sys, datetime
@@ -25,11 +26,6 @@ def run(cmd):
 
 # --- Detect matching MP3s ---
 def find_mp3s(base_name):
-    """
-    Given a lyrics file like 'ricky_lyrics.txt', look for:
-      - original:   'ricky.mp3' or 'ricky_original.mp3'
-      - instrumental: 'ricky_instrumental.mp3' or 'ricky-karaoke.mp3'
-    """
     parent = Path(base_name).parent
     stem = Path(base_name).stem.replace("_lyrics", "").replace("-lyrics", "")
     all_mp3s = list(parent.glob("*.mp3"))
@@ -42,7 +38,6 @@ def find_mp3s(base_name):
             orig = f
         if stem in lower and ("instrumental" in lower or "karaoke" in lower):
             inst = f
-
     return orig, inst
 
 # --- Main logic ---
@@ -54,7 +49,6 @@ def main():
     lyrics_txt = Path(sys.argv[1]).resolve()
     opts = sys.argv[2:]
 
-    # auto-detect MP3s if not explicitly given
     mp3_args = [a for a in opts if a.lower().endswith(".mp3")]
     non_mp3_opts = [a for a in opts if not a.lower().endswith(".mp3")]
 
@@ -80,6 +74,12 @@ def main():
     run(["python3", "karaoke_time.py", "--csv", str(csv_path), "--ass", str(ass_path), "--mp3", str(instr_mp3)] + non_mp3_opts)
 
     print(f"\n✅  Done! Output video synced to: {instr_mp3.stem}_karaoke.mp4")
+
+    # --- Open Finder in current folder ---
+    try:
+        subprocess.run(["open", "."], check=False)
+    except Exception as e:
+        print(f"⚠️  Could not open Finder automatically: {e}")
 
 if __name__ == "__main__":
     main()
