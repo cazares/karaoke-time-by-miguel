@@ -25,6 +25,19 @@ def run(cmd: str):
     print(f"\n▶️ {cmd}")
     subprocess.run(cmd, shell=True, check=False)
 
+def run_tap_mode(lyrics_txt_path, mp3_path, offset=0.0, debug=False):
+    """Run interactive tap mode via karaoke_time.py."""
+    print("\n🎹 Entering tap-timing mode (press ENTER in rhythm with lyrics)...")
+    cmd = (
+        f'python3 karaoke_time.py '
+        f'--lyrics-txt "{lyrics_txt_path}" '
+        f'--mp3 "{mp3_path}" '
+        f'--offset {offset} '
+    )
+    if debug:
+        cmd += "--debug "
+    run(cmd)
+
 def sanitize_name(name: str) -> str:
     import re
     return re.sub(r"[^A-Za-z0-9_]+", "_", name.strip().replace(" ", "_"))
@@ -90,12 +103,21 @@ def main():
     if args.override_lyric_fetch_txt and os.path.exists(args.override_lyric_fetch_txt):
         print(f"\n📝 Overriding lyric fetch with: {args.override_lyric_fetch_txt}")
         lyrics_txt_path = Path(args.override_lyric_fetch_txt)
-        lyrics_text = lyrics_txt_path.read_text(encoding="utf-8")
-        final_txt_path = lyrics_txt_path
-    else:
-        lyrics_text = handle_auto_lyrics(args.artist, args.title, debug=args.debug)
-        final_txt_path = lyrics_dir / f"FINAL_{sanitize_name(args.artist)}_{sanitize_name(args.title)}.txt"
-        final_txt_path.write_text(lyrics_text, encoding="utf-8")
+
+        # 🔹 If it's a .txt file, enter tap mode
+        if lyrics_txt_path.suffix.lower() == ".txt":
+            run_tap_mode(lyrics_txt_path, args.mp3 or mp3_path, offset=args.offset, debug=args.debug)
+            csv_path = lyrics_txt_path.with_suffix(".csv")
+            if csv_path.exists():
+                final_txt_path = csv_path
+                print(f"✅ Tap mode complete — generated CSV: {csv_path}")
+            else:
+                print("❌ CSV generation failed — aborting.")
+                sys.exit(1)
+        else:
+            lyrics_text = lyrics_txt_path.read_text(encoding="utf-8")
+            final_txt_path = lyrics_txt_path
+
 
     print(f"✅ Using lyrics file: {final_txt_path}")
 
@@ -135,6 +157,9 @@ def main():
     if args.autoplay:
         print("\n🎵 Autoplay enabled — opening in QuickTime…")
         run(f'open -a "QuickTime Player" "output/{Path(instrumental_path).stem}_karaoke.mp4"')
+    else:
+        print("\n📂 Opening Finder where the MP4 lives…")
+        run('open output')
 
 if __name__ == "__main__":
     try:
