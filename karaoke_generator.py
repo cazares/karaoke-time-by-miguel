@@ -4,22 +4,24 @@
 karaoke_generator.py — unified entrypoint for Karaoke Time
 Coordinates lyric fetching, vocal stripping, tap timing, and video rendering.
 
-New in this version:
-- --test-lyric-fetching flag (fetch lyrics only for sanity check)
-- Compatible with --debug logging from karaoke_time.py
-- Preserves audio and instrumental files when rerunning
+Features:
+  • --strip-vocals: isolate instrumental track using Demucs
+  • --test-lyric-fetching: fetch lyrics only (no downloads or separation)
+  • --override-lyric-fetch-txt: use an existing lyrics .txt instead of scraping
+  • --no-prompt: skip confirmations (auto “n” on timing reuse)
+  • --debug: enables diagnostic logging across all modules
+  • --autoplay: open finished video in QuickTime/Preview on macOS
 """
 
-import argparse, os, sys, subprocess, time
+import argparse, os, sys, subprocess, shutil
 from pathlib import Path
-from karaoke_time import handle_auto_lyrics
-import shutil
+from karaoke_lyric_fetcher import handle_auto_lyrics
+import time
 
-# ======== GLOBAL CONSTANTS ========
 DEFAULT_OUTPUT_DIR = Path("songs")
 
-# ======== HELPER FUNCTIONS ========
 def run(cmd: str):
+    """Run a shell command with visible logging."""
     print(f"\n▶️ {cmd}")
     subprocess.run(cmd, shell=True, check=False)
 
@@ -27,9 +29,8 @@ def sanitize_name(name: str) -> str:
     import re
     return re.sub(r"[^A-Za-z0-9_]+", "_", name.strip().replace(" ", "_"))
 
-# ======== MAIN FUNCTION ========
 def main():
-    parser = argparse.ArgumentParser(description="🎤 Karaoke Time — auto lyrics and video generator")
+    parser = argparse.ArgumentParser(description="🎤 Karaoke Time — auto lyrics & video generator")
 
     parser.add_argument("input", nargs="?", help="YouTube URL or local MP3 path")
     parser.add_argument("--artist", required=True, help="Artist name")
@@ -40,23 +41,11 @@ def main():
     parser.add_argument("--autoplay", action="store_true", help="Auto-play final video when done")
     parser.add_argument("--debug", action="store_true", help="Enable detailed debug logging")
     parser.add_argument("--force-new", action="store_true", help="Clear lyrics/timing files before run (keep audio)")
-    parser.add_argument(
-        "--test-lyric-fetching",
-        action="store_true",
-        help="Only fetch lyrics for debugging (no downloads, separation, or video generation)."
-    )
+    parser.add_argument("--test-lyric-fetching", action="store_true",
+                        help="Fetch lyrics only (no downloads, separation, or video generation).")
+    parser.add_argument("--override-lyric-fetch-txt", help="Use existing lyrics .txt instead of fetching")
 
     args = parser.parse_args()
-
-    # ===== 🧪 TEST-LYRIC-FETCHING MODE =====
-    if args.test_lyric_fetching:
-        print("\n🧪 --test-lyric-fetching mode active — skipping downloads and Demucs.")
-        lyrics, info = handle_auto_lyrics(None, args.artist, args.title)
-        print("\n========== LYRICS FETCHED ==========\n")
-        print(lyrics.strip())
-        print("\n====================================\n")
-        print(f"📁 Saved under: {info['lyrics']}")
-        sys.exit(0)
 
     artist_dir = sanitize_name(args.artist)
     title_dir = sanitize_name(args.title)
@@ -64,19 +53,29 @@ def main():
     lyrics_dir = base_path / "lyrics"
     os.makedirs(lyrics_dir, exist_ok=True)
 
-    # ===== 🧹 SMART RESET (FORCE-NEW) =====
+    # 🧪 Test lyric fetching mode
+    if args.test_lyric_fetching:
+        print("\n🧪 --test-lyric-fetching mode active — skipping downloads and Demucs.")
+        lyrics, info = handle_auto_lyrics(None, args.artist, args.title, force_refetch=True, debug=args.debug)
+        print("\n========== LYRICS FETCHED ==========\n")
+        print(lyrics.strip())
+        print("\n====================================\n")
+        print(f"📁 Saved under: {info['lyrics']}")
+        sys.exit(0)
+
+    # 🧹 Reset lyrics/timing only (if forced)
     if args.force_new:
         print("\n🧹 --force-new enabled: clearing lyrics/timing only…")
         shutil.rmtree(lyrics_dir, ignore_errors=True)
         print(f"🗑️ Removed: {lyrics_dir}")
         print("✅ Preserved original and instrumental MP3 files.\n")
 
-    # ===== 🎵 DETERMINE MP3 PATH =====
+    # 🎵 Determine MP3 path
     mp3_path = None
     if args.input and args.input.startswith("http"):
         mp3_path = f"{args.title}.mp3"
         if not os.path.exists(mp3_path):
-            print("\n🎧 Detected YouTube URL — downloading audio...")
+            print("\n🎧 Detected YouTube URL — downloading audio…")
             run(f'yt-dlp -x --audio-format mp3 -o "{mp3_path}" "{args.input}"')
         else:
             print(f"✅ Using existing audio file: {mp3_path}")
@@ -86,11 +85,21 @@ def main():
         print("❌ No valid input provided.")
         sys.exit(1)
 
-    # ===== 🎤 FETCH OR LOAD LYRICS =====
-    lyrics, info = handle_auto_lyrics(mp3_path, args.artist, args.title)
-    print(f"✅ Using lyrics file: {info['lyrics']}/FINAL_{sanitize_name(args.artist)}_{sanitize_name(args.title)}.txt")
+    # 🎤 Fetch lyrics (or override)
+    if args.override_lyric_fetch_txt and os.path.exists(args.override_lyric_fetch_txt):
+        print(f"\n📝 Overriding lyric fetch with: {args.override_lyric_fetch_txt}")
+        lyrics_txt_path = Path(args.override_lyric_fetch_txt)
+        lyrics_text = lyrics_txt_path.read_text(encoding="utf-8")
+        lyrics, info = lyrics_text, {"lyrics": str(lyrics_txt_path.parent)}
+    else:
+        lyrics, info = handle_auto_lyrics(
+            mp3_path, args.artist, args.title, debug=args.debug, no_prompt=args.no_prompt
+        )
 
-    # ===== 🎚️ STRIP VOCALS IF NEEDED =====
+    final_txt_path = Path(info["lyrics"]) / f"FINAL_{sanitize_name(args.artist)}_{sanitize_name(args.title)}.txt"
+    print(f"✅ Using lyrics file: {final_txt_path}")
+
+    # 🎚️ Strip vocals if requested
     instrumental_path = f"{args.title}_instrumental.mp3"
     if args.strip_vocals:
         if os.path.exists(instrumental_path):
@@ -114,11 +123,11 @@ def main():
         else:
             instrumental_path = mp3_path
 
-    # ===== 🎬 GENERATE KARAOKE VIDEO =====
-    print("\n🎬 Generating karaoke video using:", f"{info['lyrics']}/FINAL_{sanitize_name(args.artist)}_{sanitize_name(args.title)}.txt")
+    # 🎬 Generate karaoke video
+    print("\n🎬 Generating karaoke video using:", final_txt_path)
     core_cmd = (
         f'python3 karaoke_core.py '
-        f'--lyrics-txt "{info["lyrics"]}/FINAL_{sanitize_name(args.artist)}_{sanitize_name(args.title)}.txt" '
+        f'--lyrics-txt "{final_txt_path}" '
         f'--mp3 "{instrumental_path}" '
         f'--artist "{args.artist}" '
         f'--title "{args.title}" '
@@ -131,6 +140,9 @@ def main():
 
     run(core_cmd)
 
-
 if __name__ == "__main__":
-    main()
+    try:
+        main()
+    except KeyboardInterrupt:
+        print("\n👋 Exiting gracefully.")
+        sys.exit(0)

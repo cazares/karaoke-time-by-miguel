@@ -19,26 +19,35 @@ def ask(prompt, default="y"):
     return input(prompt).strip().lower() or default.lower()
 
 def render_video(lyrics_txt, mp3_path, artist=None, title=None, offset=None, autoplay=False):
+    """Render final karaoke video with embedded lyrics."""
+    out_dir = Path("output")
+    out_dir.mkdir(parents=True, exist_ok=True)
     out_name = f"{Path(mp3_path).stem}_karaoke.mp4"
-    out_path = Path("output") / out_name
-    out_path.parent.mkdir(parents=True, exist_ok=True)
+    out_path = out_dir / out_name
 
     print(f"\n🎥 Rendering karaoke video → {out_path}")
     try:
+        # Generate FFmpeg subtitle filter
+        vf = f"subtitles={lyrics_txt}:force_style='FontSize=48,Alignment=2'"
+
         cmd = [
             "ffmpeg", "-y",
             "-i", mp3_path,
-            "-vf", f"subtitles={lyrics_txt}:force_style='FontSize=48,Alignment=2'",
-            "-c:a", "copy",
+            "-vf", vf,
+            "-c:v", "libx264",
+            "-c:a", "aac",
+            "-b:a", "192k",
+            "-movflags", "+faststart",
             str(out_path)
         ]
         subprocess.run(cmd, check=True)
-        print(f"✅ Rendered: {out_path}")
+        print(f"✅ Rendered successfully: {out_path}")
     except subprocess.CalledProcessError as e:
         sys.exit(f"❌ FFmpeg failed: {e}")
 
     if autoplay:
         try:
+            print("▶️ Autoplay enabled — launching output video...")
             if platform.system() == "Darwin":
                 subprocess.run(["open", str(out_path)])
             elif platform.system() == "Windows":
@@ -49,6 +58,7 @@ def render_video(lyrics_txt, mp3_path, artist=None, title=None, offset=None, aut
             print("⚠️ Could not autoplay video.")
 
 def tap_to_time(lyrics_blocks, csv_path):
+    """Tap Enter per lyric block to record precise timing."""
     print("\n🎤 TAP-TO-TIME MODE")
     print("Press Enter once per lyric block. First press starts the clock.")
     if not NO_PROMPT:
@@ -75,7 +85,7 @@ def tap_to_time(lyrics_blocks, csv_path):
     rows = zip(range(1, len(lyrics_blocks)+1), lyrics_blocks, timestamps)
     with open(csv_path, "w", newline="", encoding="utf-8") as f:
         writer = csv.writer(f)
-        writer.writerow(["#","text","timestamp"])
+        writer.writerow(["#", "text", "timestamp"])
         for row in rows:
             writer.writerow(row)
     print(f"\n✅ Saved timing to: {csv_path}")
@@ -83,13 +93,13 @@ def tap_to_time(lyrics_blocks, csv_path):
 def main():
     import argparse
     parser = argparse.ArgumentParser(description="Core karaoke timing and rendering")
-    parser.add_argument("--lyrics-txt", required=True)
-    parser.add_argument("--mp3", required=True)
-    parser.add_argument("--artist")
-    parser.add_argument("--title")
-    parser.add_argument("--offset", type=float, default=0.0)
-    parser.add_argument("--autoplay", action="store_true")
-    parser.add_argument("--no-prompt", action="store_true")
+    parser.add_argument("--lyrics-txt", required=True, help="Path to lyrics .txt")
+    parser.add_argument("--mp3", required=True, help="Path to MP3 file")
+    parser.add_argument("--artist", help="Artist name")
+    parser.add_argument("--title", help="Song title")
+    parser.add_argument("--offset", type=float, default=0.0, help="Timing offset (seconds)")
+    parser.add_argument("--autoplay", action="store_true", help="Auto-play final MP4")
+    parser.add_argument("--no-prompt", action="store_true", help="Skip confirmations")
     args = parser.parse_args()
 
     global NO_PROMPT
