@@ -3,12 +3,12 @@
 """
 karaoke_generator.py — end-to-end karaoke pipeline
 Fetches lyrics → optional vocal removal → launches karaoke_core.
+Supports YouTube URLs automatically.
 """
 
-import subprocess, sys, os
+import subprocess, sys, os, glob
 from pathlib import Path
 from karaoke_time import handle_auto_lyrics
-from glob import glob
 
 def run(cmd):
     print("\n▶️", " ".join(str(c) for c in cmd))
@@ -16,8 +16,27 @@ def run(cmd):
 
 def main():
     if len(sys.argv) < 2:
-        print("Usage: python3 karaoke_generator.py <song.mp3> [--strip-vocals] [--artist 'Name'] [--title 'Song'] [--lyrics-txt path]")
+        print("Usage: python3 karaoke_generator.py <song.mp3 | YouTube_URL> [--strip-vocals] [--artist 'Name'] [--title 'Song'] [--offset 1.5]")
         sys.exit(1)
+
+    # === Phase 0: Allow YouTube URL ===
+    if sys.argv[1].startswith("http"):
+        url = sys.argv[1]
+        print(f"🎧 Downloading audio from YouTube: {url}")
+        run([
+            "yt-dlp",
+            "-f", "bestaudio",
+            "--extract-audio",
+            "--audio-format", "mp3",
+            "--output", "%(title)s.%(ext)s",
+            url
+        ])
+        mp3_files = glob.glob("*.mp3")
+        if not mp3_files:
+            sys.exit("❌ No MP3 produced by yt-dlp.")
+        mp3_files.sort(key=os.path.getmtime, reverse=True)
+        sys.argv[1] = mp3_files[0]
+        print(f"✅ Using downloaded MP3: {sys.argv[1]}")
 
     mp3 = Path(sys.argv[1]).resolve()
     if not mp3.exists():
@@ -26,10 +45,13 @@ def main():
     strip_vocals = "--strip-vocals" in sys.argv
     artist = None
     title = None
+    offset_val = 0.0
     if "--artist" in sys.argv:
         artist = sys.argv[sys.argv.index("--artist") + 1]
     if "--title" in sys.argv:
         title = sys.argv[sys.argv.index("--title") + 1]
+    if "--offset" in sys.argv:
+        offset_val = float(sys.argv[sys.argv.index("--offset") + 1])
 
     # === Phase 1: Fetch or use lyrics ===
     if "--lyrics-txt" in sys.argv:
@@ -40,18 +62,12 @@ def main():
         print(f"✅ Using existing lyrics file: {lyrics_txt_path}")
     else:
         lyrics_text, paths = handle_auto_lyrics(str(mp3), artist, title)
-
-        # 🔧 FIXED: auto-detect correct FINAL_ file
-        candidates = glob(os.path.join(paths["lyrics"], "FINAL_*.txt"))
+        candidates = glob.glob(os.path.join(paths["lyrics"], "FINAL_*.txt"))
         if not candidates:
             sys.exit("❌ Could not locate FINAL_ lyrics file in " + paths["lyrics"])
-        elif len(candidates) > 1:
-            print(f"⚠️ Multiple FINAL_*.txt files found, using the newest one.")
-            candidates.sort(key=os.path.getmtime, reverse=True)
+        candidates.sort(key=os.path.getmtime, reverse=True)
         lyrics_txt_path = candidates[0]
         print(f"✅ Using lyrics file: {lyrics_txt_path}")
-
-        # 🧱 Ensure output dir always defined
         output_dir = os.path.join(os.path.dirname(paths["lyrics"]), "output")
         os.makedirs(output_dir, exist_ok=True)
         paths["output"] = output_dir
@@ -74,6 +90,9 @@ def main():
         "python3", "karaoke_core.py",
         "--lyrics-txt", lyrics_txt_path,
         "--mp3", str(instr_mp3),
+        "--artist", artist or "",
+        "--title", title or "",
+        "--offset", str(offset_val),
         "--autoplay"
     ])
 

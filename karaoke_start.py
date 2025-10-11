@@ -1,12 +1,12 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-start_karaoke_env.py — automatic bootstrap + optional karaoke generation
-Creates 'demucs_env', installs dependencies, verifies setup,
-and optionally runs karaoke_generator.py on a given song.
+karaoke_start.py — fully automated bootstrap & restart-safe launcher
+Creates or resets 'demucs_env', installs dependencies, and runs karaoke_generator.py.
+The user never has to activate or manage the environment manually.
 """
 
-import os, sys, subprocess
+import os, sys, subprocess, shutil
 
 VENV_DIR = "demucs_env"
 REQUIREMENTS = "requirements.txt"
@@ -26,38 +26,57 @@ torch
 torchaudio
 ffmpeg-python
 tqdm
+yt-dlp
 """)
     print(f"✅ Requirements file ready: {REQUIREMENTS}")
 
-def main():
-    ensure_requirements()
+def rebuild_env():
+    # 🧹 Remove old environment safely
+    if os.path.isdir(VENV_DIR):
+        print(f"🧹 Removing old virtual environment: {VENV_DIR}")
+        shutil.rmtree(VENV_DIR, ignore_errors=True)
 
-    # 1️⃣ Create virtual environment if missing
-    if not os.path.isdir(VENV_DIR):
-        print(f"🧱 Creating virtual environment: {VENV_DIR}")
-        run([sys.executable, "-m", "venv", VENV_DIR])
-    else:
-        print(f"✅ Virtual environment already exists: {VENV_DIR}")
+    # 🧱 Create a fresh environment
+    print(f"🧱 Creating fresh virtual environment: {VENV_DIR}")
+    run([sys.executable, "-m", "venv", VENV_DIR])
 
     pip_exe = os.path.join(VENV_DIR, "bin", "pip")
-    py_exe = os.path.join(VENV_DIR, "bin", "python")
-
-    # 2️⃣ Install dependencies
     print("📦 Installing dependencies...")
     run([pip_exe, "install", "-U", "pip", "wheel", "setuptools"])
     run([pip_exe, "install", "-r", REQUIREMENTS])
 
-    # 3️⃣ Verify core imports
-    print("🔍 Verifying key imports...")
-    run([py_exe, "-c", "import requests, demucs, soundfile, torch; print('✅ All imports OK!')"])
+def main():
+    # Detect if we’re inside the venv we want to rebuild
+    inside_venv = (
+        sys.prefix != sys.base_prefix and
+        os.path.basename(sys.prefix) == VENV_DIR
+    )
 
-    # 4️⃣ If user passed args, run karaoke_generator immediately
+    if inside_venv:
+        print("⚠️ Detected that you’re running *inside* the environment being rebuilt.")
+        print("🔄 Relaunching this script from system Python instead…\n")
+
+        # Relaunch outside the env (parent Python)
+        envless_python = sys.executable
+        if "bin" in envless_python and VENV_DIR in envless_python:
+            envless_python = "/usr/bin/python3" if os.path.exists("/usr/bin/python3") else "python3"
+
+        cmd = [envless_python, __file__] + sys.argv[1:]
+        os.execvp(cmd[0], cmd)  # Replace current process with the new one
+        return
+
+    # Normal flow: outside venv, full setup
+    ensure_requirements()
+    rebuild_env()
+
+    py_exe = os.path.join(VENV_DIR, "bin", "python")
+
     if len(sys.argv) > 1:
         print("\n🎶 Running karaoke_generator.py with your arguments…\n")
         run([py_exe, "karaoke_generator.py"] + sys.argv[1:])
     else:
-        print(f"\n🎉 Setup complete!")
-        print(f"To use it manually:\n   source {VENV_DIR}/bin/activate && python3 karaoke_generator.py \"your_song.mp3\" --artist \"Artist\" --title \"Song Title\" --strip-vocals")
+        print(f"\n✅ Environment ready!")
+        print(f"Run manually:\n   python3 karaoke_start.py \"your_song.mp3\" --artist \"Artist\" --title \"Song Title\" --strip-vocals")
 
 if __name__ == "__main__":
     try:

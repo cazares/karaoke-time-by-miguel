@@ -1,4 +1,3 @@
-
 #!/usr/bin/env python3
 import os, sys, subprocess
 from pathlib import Path
@@ -29,14 +28,15 @@ def main():
     if not sep_dir.exists():
         sys.exit("❌ Could not find Demucs output folder.")
     stems = {n: sep_dir / f"{n}.wav" for n in ("drums", "bass", "other")}
-    for n, f in stems.items():
+    for f in stems.values():
         if not f.exists(): sys.exit(f"❌ Missing stem: {f}")
-    output_file = song.with_name(f"{song.stem}_instrumental.mp3")
-    print("🎧 Combining non-vocal stems...")
+    out = song.with_name(f"{song.stem}_instrumental.mp3")
+    print("🎧 Combining non-vocal stems…")
     cmd = ["ffmpeg","-y"]
-    for f in stems.values(): cmd += ["-i", str(f)]
-    cmd += ["-filter_complex", f"amix=inputs={len(stems)}:normalize=1,alimiter=limit=0.9", "-qscale:a", "2", str(output_file)]
+    [cmd.extend(["-i", str(f)]) for f in stems.values()]
+    cmd += ["-filter_complex", f"amix=inputs={len(stems)}:normalize=1,alimiter=limit=0.9", "-qscale:a","2", str(out)]
     run(cmd)
-    print(f"✅ Instrumental created: {output_file}")
+    print(f"✅ Instrumental created: {out}")
+
 if __name__ == "__main__":
     main()
