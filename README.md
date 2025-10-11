@@ -1,95 +1,79 @@
-# 🎤 Karaoke Time  
-*A lyric video generator by Miguel Cázares*
+# 🎤 Karaoke Time v3.3  
+*Automated lyric fetching, editing & video creation by Miguel Cázares*
 
-Karaoke Time is a Python + AppleScript tool that creates karaoke-style lyric videos with synchronized subtitles, audio, and smooth fade-outs.  
-
-It’s designed for musicians, performers, and hobbyists who want to quickly generate professional-looking lyric videos from a simple CSV file.
+Karaoke Time v3.3 takes your favorite songs and turns them into fully timed lyric videos — automatically fetching lyrics, letting you edit them, and generating high-quality karaoke videos with minimal effort.  
 
 ---
 
 ## ✨ Features
-- **Automatic lyric timing**  
-  - Adjustable line spacing (`--lyric-block-spacing`)  
-  - Fade-out only (no fade-in) with minimum visibility safeguards  
-- **Configurable appearance**  
-  - Subtitle font size (`--font-size`)  
-  - Global audio offset correction (`--offset`)  
-- **High-quality video output**  
-  - Generates H.264 + AAC MP4 via `ffmpeg`  
-  - Faststart enabled for web streaming  
-- **Smart integrations (macOS)**  
-  - Pauses/mutes Apple Music, Spotify, QuickTime, and Chrome `<video>/<audio>` tabs during render  
-  - Optionally **autoplays the result** in QuickTime (fallback to Preview → Finder)  
-- **Cross-platform support**  
-  - Works on macOS, Linux, and Windows (autoplay is macOS-specific)  
-
----
-
-## 📂 File Structure
-```
-karaoke-time/
-├── karaoke_time.py           # Main Python script
-├── pause_media.applescript   # Helper script (pauses/mutes other media apps on macOS)
-├── lyrics/                   # Place your .csv, .ass, and .mp3 files here
-└── output/                   # Generated .mp4 files
-```
+- **One-Command Automation**  
+  Fetches lyrics, prompts you to edit line breaks, then times and renders the video automatically.  
+- **Optional Vocal Removal**  
+  Use `--strip-vocals` to generate an instrumental version via Demucs before timing.  
+- **Fully Hands-Free Render**  
+  From fetch → edit → timing → video creation with no extra setup.  
+- **Smart File Organization**  
+  Each song is stored under `songs/Artist__Title/` with subfolders for audio, lyrics, output, and logs.  
+- **macOS Integration**  
+  Automatically uses AppleScript for pausing other media apps while rendering.  
 
 ---
 
 ## 🚀 Quick Start
+1. 🎧 Place your song MP3 anywhere and run:  
+   ```bash
+   python3 karaoke_generator.py "path/to/song.mp3"
+   ```
 
-### 1. Install dependencies
-- Python 3.8+  
-- [ffmpeg](https://ffmpeg.org/download.html) installed and available in `$PATH`  
-- macOS only: enable  
-  **Chrome > View > Developer > ✔ Allow JavaScript from Apple Events**  
-  (required for Chrome tab muting)
+2. ✏️ Wait for lyrics to be fetched automatically.  
+   Then edit the generated `FINAL_Artist__Title.txt` to insert `\N` line breaks, save, and press **Enter** when prompted.
 
-### 2. Run the generator
+3. 🎬 Sit back — the script handles timing, rendering, and video generation automatically.
+
+### Optional Instrumental Mode
 ```bash
-python3 karaoke_time.py lyrics/lyrics.csv lyrics/lyrics.ass lyrics/song.mp3
+python3 karaoke_generator.py "path/to/song.mp3" --strip-vocals
+```
+Uses **Demucs** to create an instrumental before processing.
+
+---
+
+## 📂 Folder Layout
+```
+karaoke_time/
+├── karaoke_core.py
+├── karaoke_time.py
+├── karaoke_generator.py
+├── karaoke_maker.py
+├── pause_media.applescript
+└── songs/
+    └── Artist__Title/
+        ├── audio/
+        ├── lyrics/
+        │   ├── auto_Artist__Title.txt
+        │   └── FINAL_Artist__Title.txt
+        ├── output/
+        └── logs/
 ```
 
-### 3. Recommended example
-```bash
-python3 karaoke_time.py "$(pwd)/lyrics/lyrics_2025-10-07_2126.csv" "$(pwd)/lyrics/lyrics_2025-10-07_2126.ass" "$(pwd)/lyrics/song.mp3" --font-size 155 --lyric-block-spacing 0.8 --offset 1.0 --autoplay
-```
+---
+
+## ⚙️ Requirements
+- 🐍 Python 3.8 or newer  
+- 🎥 [ffmpeg](https://ffmpeg.org/download.html) in `$PATH`  
+- (Optional) [Demucs](https://github.com/facebookresearch/demucs) for vocal removal  
+- macOS users: enable  
+  **Chrome › View › Developer › ✔ Allow JavaScript from Apple Events**  
+  for tab muting to work.  
 
 ---
 
-## ⚙️ Command-Line Options
-| Flag | Description | Default |
-|------|-------------|---------|
-| `--font-size <int>` | Subtitle font size | `52` |
-| `--lyric-block-spacing <sec>` | Time gap before next lyric | `0.8` |
-| `--buffer <sec>` | Trim from last line’s end | `0.5` |
-| `--fade-out-ms <ms>` | Fade-out duration | `300` |
-| `--offset <sec>` | Global audio offset | `0.0` |
-| `--output-prefix <str>` | Output file prefix | `non_interactive_` |
-| `--pause-script <file>` | AppleScript to pause other media | `pause_media.applescript` |
-| `--autoplay` | Autoplay the final MP4 (macOS only) | `false` |
-
----
-
-## 📝 Example Workflow
-1. Create a `lyrics.csv` with start/end times + lyric text.  
-2. Provide an `.ass` subtitle file (can be regenerated from CSV).  
-3. Place your `song.mp3` in the `lyrics/` folder.  
-4. Run the script with desired options.  
-5. Enjoy your synchronized karaoke video in QuickTime! 🎶  
-
----
-
-## 📸 Example Output
-![RHCP - Californication No Vocals No Bass Guitar](https://drive.google.com/uc?export=view&id=1MyoNIjk2LskrnVm0GGYuXkutMVDuMaxe)
+## 💡 Tips
+- Keep file names in `Artist__Title` format for best results.  
+- Use `\N` to control line breaks and lyric placement in the final video.  
+- Output videos are saved in `songs/Artist__Title/output/`.  
 
 ---
 
 ## 👨‍💻 Author
-Created by **Miguel Cázares**  
-[Website](https://miguelengineer.com) · [GitHub](https://github.com/mcazares) · [LinkedIn](https://linkedin.com/in/miguelcazares)
-
----
-
-## 📄 License
-MIT License © 2025 Miguel Cázares  
+Created by **Miguel Cázares**
