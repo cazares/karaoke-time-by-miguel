@@ -34,7 +34,7 @@ PlayResY: 1080
 
 [V4+ Styles]
 Format: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, OutlineColour, BackColour, Bold, Italic, Underline, StrikeOut, ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline, Shadow, Alignment, MarginL, MarginR, MarginV, Encoding
-Style: Default,{font_name},{font_size},&H00FFFFFF,&H000000FF,&H00000000,&H64000000,0,0,0,0,100,100,0,0,1,2,0,8,50,50,200,1
+Style: Default,{font_name},{font_size},&H00FFFFFF,&H000000FF,&H00000000,&H64000000,0,0,0,0,100,100,0,0,1,2,0,5,50,50,50,1
 
 [Events]
 Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
@@ -45,7 +45,10 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
     for i, row in enumerate(rows):
         start = seconds_to_ass(row["timestamp"])
         end = seconds_to_ass(rows[i + 1]["timestamp"]) if i + 1 < len(rows) else seconds_to_ass(float(row["timestamp"]) + 3)
-        lyric = row["text"].strip().replace("\\N", " ").replace(",", "，")  # avoid comma parsing bugs and \N parsing bugs
+        lyric = row["text"].strip()
+        lyric = lyric.replace("\\N\\N", "\\N\\N")  # preserve double breaks
+        lyric = lyric.replace("\\N", "\\N")        # keep single breaks intact
+        lyric = lyric.replace(",", "，")            # avoid comma parsing bugs
         lines.append(f"Dialogue: 0,{start},{end},Default,,0,0,0,,{lyric}")
 
     out_path.write_text(header + "\n".join(lines), encoding="utf-8")
