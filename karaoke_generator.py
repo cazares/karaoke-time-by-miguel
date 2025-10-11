@@ -44,6 +44,7 @@ def main():
     parser.add_argument("--test-lyric-fetching", action="store_true",
                         help="Fetch lyrics only (no downloads, separation, or video generation).")
     parser.add_argument("--override-lyric-fetch-txt", help="Use existing lyrics .txt instead of fetching")
+    parser.add_argument("--mp3", required=False, help="Path to the MP3 file to use for karaoke generation")
 
     args = parser.parse_args()
 

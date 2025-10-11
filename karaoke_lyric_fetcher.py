@@ -170,6 +170,28 @@ def fetch_lyrics_sources(artist, title, debug=False, debug_log=None):
     except Exception as e:
         print(f"⚠️ Lyrics.com scrape failed: {e}")
 
-    # If all fail
+        # If all fail
     print("❌ All lyric sources failed.")
     return ""
+
+# -------------------------------------------------------------
+# Backward compatibility shim (used by karaoke_generator.py)
+# -------------------------------------------------------------
+def handle_auto_lyrics(artist, title, debug=False, debug_log=None):
+    """
+    Backward-compatible alias for fetch_lyrics_sources().
+    Required by karaoke_generator.py (LKG-S 2025-10-11).
+
+    Args:
+        artist (str): Artist name.
+        title (str): Song title.
+        debug (bool): Enable verbose output.
+        debug_log (str): Optional path for debug log.
+
+    Returns:
+        str: Lyrics text if found, otherwise empty string.
+    """
+    print(f"🎵 handle_auto_lyrics() → fetching lyrics for '{artist} – {title}'")
+    return fetch_lyrics_sources(artist, title, debug=debug, debug_log=debug_log)
+
+# end of karaoke_lyric_fetcher.py
