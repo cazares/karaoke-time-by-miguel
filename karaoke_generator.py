@@ -57,11 +57,10 @@ def main():
     # 🧪 Test lyric fetching mode
     if args.test_lyric_fetching:
         print("\n🧪 --test-lyric-fetching mode active — skipping downloads and Demucs.")
-        lyrics, info = handle_auto_lyrics(None, args.artist, args.title, force_refetch=True, debug=args.debug)
+        lyrics_text = handle_auto_lyrics(args.artist, args.title, debug=args.debug)
         print("\n========== LYRICS FETCHED ==========\n")
-        print(lyrics.strip())
+        print(lyrics_text.strip())
         print("\n====================================\n")
-        print(f"📁 Saved under: {info['lyrics']}")
         sys.exit(0)
 
     # 🧹 Reset lyrics/timing only (if forced)
@@ -72,8 +71,9 @@ def main():
         print("✅ Preserved original and instrumental MP3 files.\n")
 
     # 🎵 Determine MP3 path
-    mp3_path = None
-    if args.input and args.input.startswith("http"):
+    if args.mp3 and os.path.exists(args.mp3):
+        mp3_path = args.mp3
+    elif args.input and args.input.startswith("http"):
         mp3_path = f"{args.title}.mp3"
         if not os.path.exists(mp3_path):
             print("\n🎧 Detected YouTube URL — downloading audio…")
@@ -83,7 +83,7 @@ def main():
     elif args.input and os.path.exists(args.input):
         mp3_path = args.input
     else:
-        print("❌ No valid input provided.")
+        print("❌ No valid input or --mp3 provided.")
         sys.exit(1)
 
     # 🎤 Fetch lyrics (or override)
@@ -91,13 +91,12 @@ def main():
         print(f"\n📝 Overriding lyric fetch with: {args.override_lyric_fetch_txt}")
         lyrics_txt_path = Path(args.override_lyric_fetch_txt)
         lyrics_text = lyrics_txt_path.read_text(encoding="utf-8")
-        lyrics, info = lyrics_text, {"lyrics": str(lyrics_txt_path.parent)}
+        final_txt_path = lyrics_txt_path
     else:
-        lyrics, info = handle_auto_lyrics(
-            mp3_path, args.artist, args.title, debug=args.debug, no_prompt=args.no_prompt
-        )
+        lyrics_text = handle_auto_lyrics(args.artist, args.title, debug=args.debug)
+        final_txt_path = lyrics_dir / f"FINAL_{sanitize_name(args.artist)}_{sanitize_name(args.title)}.txt"
+        final_txt_path.write_text(lyrics_text, encoding="utf-8")
 
-    final_txt_path = Path(info["lyrics"]) / f"FINAL_{sanitize_name(args.artist)}_{sanitize_name(args.title)}.txt"
     print(f"✅ Using lyrics file: {final_txt_path}")
 
     # 🎚️ Strip vocals if requested
@@ -128,18 +127,14 @@ def main():
     print("\n🎬 Generating karaoke video using:", final_txt_path)
     core_cmd = (
         f'python3 karaoke_core.py '
-        f'--lyrics-txt "{final_txt_path}" '
+        f'--csv "{final_txt_path}" '
         f'--mp3 "{instrumental_path}" '
-        f'--artist "{args.artist}" '
-        f'--title "{args.title}" '
-        f'--offset {args.offset} '
     )
-    if args.no_prompt:
-        core_cmd += "--no-prompt "
-    if args.autoplay:
-        core_cmd += "--autoplay "
-
     run(core_cmd)
+
+    if args.autoplay:
+        print("\n🎵 Autoplay enabled — opening in QuickTime…")
+        run(f'open -a "QuickTime Player" "output/{Path(instrumental_path).stem}_karaoke.mp4"')
 
 if __name__ == "__main__":
     try:
@@ -147,3 +142,5 @@ if __name__ == "__main__":
     except KeyboardInterrupt:
         print("\n👋 Exiting gracefully.")
         sys.exit(0)
+
+# end of karaoke_generator.py

@@ -3,6 +3,7 @@
 """
 karaoke_core.py — core logic for lyric timing & rendering
 Now includes automatic FFmpeg rendering step after .ASS creation.
+Auto-detects plain TXT vs CSV and handles both formats.
 """
 
 import csv, sys, subprocess, shlex
@@ -30,25 +31,35 @@ def render_karaoke_video(audio_path, ass_path, output_path, font_name, font_size
         print(f"❌ FFmpeg failed: {e}")
 
 def main():
-    parser = argparse.ArgumentParser(description="Generate karaoke MP4 from CSV lyric timings and audio file.")
-    parser.add_argument("--csv", required=True, help="Path to lyrics_timing.csv file")
+    parser = argparse.ArgumentParser(description="Generate karaoke MP4 from lyrics (CSV or TXT) and audio file.")
+    parser.add_argument("--csv", required=True, help="Path to lyrics file (.csv or .txt)")
     parser.add_argument("--mp3", required=True, help="Path to source audio MP3 file")
     parser.add_argument("--font-name", default="Helvetica Neue Bold", help="Font name for lyrics")
     parser.add_argument("--font-size", type=int, default=140, help="Font size for lyrics")
     args = parser.parse_args()
 
-    csv_path = Path(args.csv)
+    lyrics_path = Path(args.csv)
     audio_path = Path(args.mp3)
     font_name = args.font_name
     font_size = args.font_size
 
     # Generate .ass
-    ass_path = csv_path.with_suffix(".ass")
-    print(f"🪶 Generating ASS from {csv_path} ...")
+    ass_path = lyrics_path.with_suffix(".ass")
+    print(f"🪶 Generating ASS from {lyrics_path} ...")
 
-    with open(csv_path, newline='', encoding="utf-8") as f:
-        reader = csv.DictReader(f)
-        rows = list(reader)
+    rows = []
+    if lyrics_path.suffix.lower() == ".csv":
+        # ---- CSV MODE ----
+        with open(lyrics_path, newline='', encoding="utf-8") as f:
+            reader = csv.DictReader(f)
+            rows = list(reader)
+    else:
+        # ---- TXT MODE ----
+        lines = [l.strip() for l in lyrics_path.read_text(encoding="utf-8").splitlines() if l.strip()]
+        ts = 0.0
+        for line in lines:
+            rows.append({"timestamp": ts, "text": line})
+            ts += 3.0  # default spacing 3 seconds per line
 
     header = f"""[Script Info]
 ScriptType: v4.00+
