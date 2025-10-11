@@ -5,9 +5,10 @@ karaoke_core.py — core logic for lyric timing & rendering
 Now includes automatic FFmpeg rendering step after .ASS creation.
 """
 
-import csv, os, sys, subprocess, shlex
+import csv, sys, subprocess, shlex
 from pathlib import Path
 from datetime import datetime
+import argparse
 
 def seconds_to_ass(ts):
     m, s = divmod(float(ts), 60)
@@ -29,12 +30,17 @@ def render_karaoke_video(audio_path, ass_path, output_path, font_name, font_size
         print(f"❌ FFmpeg failed: {e}")
 
 def main():
-    if len(sys.argv) < 3:
-        print("Usage: python3 karaoke_core.py lyrics_timing.csv test_vocals_audio.mp3")
-        sys.exit(1)
+    parser = argparse.ArgumentParser(description="Generate karaoke MP4 from CSV lyric timings and audio file.")
+    parser.add_argument("--csv", required=True, help="Path to lyrics_timing.csv file")
+    parser.add_argument("--mp3", required=True, help="Path to source audio MP3 file")
+    parser.add_argument("--font-name", default="Helvetica Neue Bold", help="Font name for lyrics")
+    parser.add_argument("--font-size", type=int, default=140, help="Font size for lyrics")
+    args = parser.parse_args()
 
-    csv_path = Path(sys.argv[1])
-    audio_path = Path(sys.argv[2])
+    csv_path = Path(args.csv)
+    audio_path = Path(args.mp3)
+    font_name = args.font_name
+    font_size = args.font_size
 
     # Generate .ass
     ass_path = csv_path.with_suffix(".ass")
@@ -44,8 +50,6 @@ def main():
         reader = csv.DictReader(f)
         rows = list(reader)
 
-    font_name = "Helvetica Neue Bold"
-    font_size = 140
     header = f"""[Script Info]
 ScriptType: v4.00+
 PlayResX: 1920
