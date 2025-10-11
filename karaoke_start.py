@@ -2,14 +2,20 @@
 # -*- coding: utf-8 -*-
 """
 karaoke_start.py — fully automated bootstrap & restart-safe launcher
-Creates or resets 'demucs_env', installs dependencies, and runs karaoke_generator.py.
-The user never has to activate or manage the environment manually.
+Creates or resets 'demucs_env', installs dependencies, purges caches,
+and runs karaoke_generator.py. User never has to manage environments.
 """
 
-import os, sys, subprocess, shutil
+import os, sys, subprocess, shutil, time
 
 VENV_DIR = "demucs_env"
 REQUIREMENTS = "requirements.txt"
+CACHE_DIRS = [
+    "__pycache__",
+    "*/__pycache__",
+    "songs/__pycache__",
+    "demucs_env/lib/python3.13/site-packages/__pycache__"
+]
 
 def run(cmd, **kwargs):
     print("▶️", " ".join(cmd))
@@ -30,6 +36,18 @@ yt-dlp
 """)
     print(f"✅ Requirements file ready: {REQUIREMENTS}")
 
+def purge_pycache():
+    print("🧹 Clearing stale Python caches...")
+    for root, dirs, files in os.walk("."):
+        if "__pycache__" in dirs:
+            full = os.path.join(root, "__pycache__")
+            try:
+                shutil.rmtree(full)
+                print(f"  🗑️  Removed: {full}")
+            except Exception:
+                pass
+    print("✅ Caches cleared.\n")
+
 def rebuild_env():
     # 🧹 Remove old environment safely
     if os.path.isdir(VENV_DIR):
@@ -46,6 +64,9 @@ def rebuild_env():
     run([pip_exe, "install", "-r", REQUIREMENTS])
 
 def main():
+    # ☕ Step 1: Clean up caches first
+    purge_pycache()
+
     # Detect if we’re inside the venv we want to rebuild
     inside_venv = (
         sys.prefix != sys.base_prefix and
@@ -53,16 +74,12 @@ def main():
     )
 
     if inside_venv:
-        print("⚠️ Detected that you’re running *inside* the environment being rebuilt.")
-        print("🔄 Relaunching this script from system Python instead…\n")
+        print("⚠️ Detected you’re running inside the environment being rebuilt.")
+        print("🔄 Relaunching from system Python…\n")
 
-        # Relaunch outside the env (parent Python)
-        envless_python = sys.executable
-        if "bin" in envless_python and VENV_DIR in envless_python:
-            envless_python = "/usr/bin/python3" if os.path.exists("/usr/bin/python3") else "python3"
-
+        envless_python = "/usr/bin/python3" if os.path.exists("/usr/bin/python3") else "python3"
         cmd = [envless_python, __file__] + sys.argv[1:]
-        os.execvp(cmd[0], cmd)  # Replace current process with the new one
+        os.execvp(cmd[0], cmd)
         return
 
     # Normal flow: outside venv, full setup
