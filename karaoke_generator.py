@@ -1,107 +1,136 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-karaoke_generator.py — end-to-end karaoke pipeline
-Fetches lyrics → optional vocal removal → launches karaoke_core.
-Fully supports --no-prompt for unattended runs.
+karaoke_generator.py — unified entrypoint for Karaoke Time
+Coordinates lyric fetching, vocal stripping, tap timing, and video rendering.
+
+New in this version:
+- --test-lyric-fetching flag (fetch lyrics only for sanity check)
+- Compatible with --debug logging from karaoke_time.py
+- Preserves audio and instrumental files when rerunning
 """
 
-import subprocess, sys, os
+import argparse, os, sys, subprocess, time
 from pathlib import Path
-from glob import glob
 from karaoke_time import handle_auto_lyrics
+import shutil
 
-def run(cmd):
-    print("\n▶️", " ".join(str(c) for c in cmd))
-    subprocess.run(cmd, check=True)
+# ======== GLOBAL CONSTANTS ========
+DEFAULT_OUTPUT_DIR = Path("songs")
 
+# ======== HELPER FUNCTIONS ========
+def run(cmd: str):
+    print(f"\n▶️ {cmd}")
+    subprocess.run(cmd, shell=True, check=False)
+
+def sanitize_name(name: str) -> str:
+    import re
+    return re.sub(r"[^A-Za-z0-9_]+", "_", name.strip().replace(" ", "_"))
+
+# ======== MAIN FUNCTION ========
 def main():
-    if len(sys.argv) < 2:
-        print("Usage: python3 karaoke_generator.py <song.mp3|YouTube URL> "
-              "[--strip-vocals] [--artist 'Name'] [--title 'Song'] "
-              "[--lyrics-txt path] [--offset seconds] [--no-prompt]")
+    parser = argparse.ArgumentParser(description="🎤 Karaoke Time — auto lyrics and video generator")
+
+    parser.add_argument("input", nargs="?", help="YouTube URL or local MP3 path")
+    parser.add_argument("--artist", required=True, help="Artist name")
+    parser.add_argument("--title", required=True, help="Song title")
+    parser.add_argument("--strip-vocals", action="store_true", help="Strip vocals using Demucs")
+    parser.add_argument("--offset", type=float, default=0.0, help="Global timing offset (seconds)")
+    parser.add_argument("--no-prompt", action="store_true", help="Skip all interactive prompts")
+    parser.add_argument("--autoplay", action="store_true", help="Auto-play final video when done")
+    parser.add_argument("--debug", action="store_true", help="Enable detailed debug logging")
+    parser.add_argument("--force-new", action="store_true", help="Clear lyrics/timing files before run (keep audio)")
+    parser.add_argument(
+        "--test-lyric-fetching",
+        action="store_true",
+        help="Only fetch lyrics for debugging (no downloads, separation, or video generation)."
+    )
+
+    args = parser.parse_args()
+
+    # ===== 🧪 TEST-LYRIC-FETCHING MODE =====
+    if args.test_lyric_fetching:
+        print("\n🧪 --test-lyric-fetching mode active — skipping downloads and Demucs.")
+        lyrics, info = handle_auto_lyrics(None, args.artist, args.title)
+        print("\n========== LYRICS FETCHED ==========\n")
+        print(lyrics.strip())
+        print("\n====================================\n")
+        print(f"📁 Saved under: {info['lyrics']}")
+        sys.exit(0)
+
+    artist_dir = sanitize_name(args.artist)
+    title_dir = sanitize_name(args.title)
+    base_path = DEFAULT_OUTPUT_DIR / f"{artist_dir}__{title_dir}"
+    lyrics_dir = base_path / "lyrics"
+    os.makedirs(lyrics_dir, exist_ok=True)
+
+    # ===== 🧹 SMART RESET (FORCE-NEW) =====
+    if args.force_new:
+        print("\n🧹 --force-new enabled: clearing lyrics/timing only…")
+        shutil.rmtree(lyrics_dir, ignore_errors=True)
+        print(f"🗑️ Removed: {lyrics_dir}")
+        print("✅ Preserved original and instrumental MP3 files.\n")
+
+    # ===== 🎵 DETERMINE MP3 PATH =====
+    mp3_path = None
+    if args.input and args.input.startswith("http"):
+        mp3_path = f"{args.title}.mp3"
+        if not os.path.exists(mp3_path):
+            print("\n🎧 Detected YouTube URL — downloading audio...")
+            run(f'yt-dlp -x --audio-format mp3 -o "{mp3_path}" "{args.input}"')
+        else:
+            print(f"✅ Using existing audio file: {mp3_path}")
+    elif args.input and os.path.exists(args.input):
+        mp3_path = args.input
+    else:
+        print("❌ No valid input provided.")
         sys.exit(1)
 
-    no_prompt = "--no-prompt" in sys.argv
-    strip_vocals = "--strip-vocals" in sys.argv
+    # ===== 🎤 FETCH OR LOAD LYRICS =====
+    lyrics, info = handle_auto_lyrics(mp3_path, args.artist, args.title)
+    print(f"✅ Using lyrics file: {info['lyrics']}/FINAL_{sanitize_name(args.artist)}_{sanitize_name(args.title)}.txt")
 
-    mp3_arg = sys.argv[1]
-    artist = None
-    title = None
-    offset = None
-
-    if "--artist" in sys.argv:
-        artist = sys.argv[sys.argv.index("--artist") + 1]
-    if "--title" in sys.argv:
-        title = sys.argv[sys.argv.index("--title") + 1]
-    if "--offset" in sys.argv:
-        offset = sys.argv[sys.argv.index("--offset") + 1]
-
-    # === Phase 0: Download YouTube audio if URL provided ===
-    mp3_path = Path(mp3_arg)
-    if mp3_arg.startswith("http"):
-        print(f"🎧 Detected YouTube URL — downloading audio...")
-        mp3_out = f"{title or 'karaoke_track'}.mp3"
-        run(["yt-dlp", "-x", "--audio-format", "mp3", "-o", mp3_out, mp3_arg])
-        mp3_path = Path(mp3_out)
-    else:
-        if not mp3_path.exists():
-            sys.exit(f"❌ MP3 not found: {mp3_path}")
-
-    # === Phase 1: Fetch or use lyrics ===
-    if "--lyrics-txt" in sys.argv:
-        lyrics_txt_path = sys.argv[sys.argv.index("--lyrics-txt") + 1]
-        lyrics_dir = os.path.dirname(os.path.abspath(lyrics_txt_path))
-        output_dir = os.path.join(os.path.dirname(lyrics_dir), "output")
-        paths = {"lyrics": lyrics_dir, "output": output_dir}
-        print(f"✅ Using existing lyrics file: {lyrics_txt_path}")
-    else:
-        lyrics_text, paths = handle_auto_lyrics(str(mp3_path), artist, title)
-
-        candidates = glob(os.path.join(paths["lyrics"], "FINAL_*.txt"))
-        if not candidates:
-            sys.exit("❌ Could not locate FINAL_ lyrics file.")
-        candidates.sort(key=os.path.getmtime, reverse=True)
-        lyrics_txt_path = candidates[0]
-        print(f"✅ Using lyrics file: {lyrics_txt_path}")
-
-        output_dir = os.path.join(os.path.dirname(paths["lyrics"]), "output")
-        os.makedirs(output_dir, exist_ok=True)
-        paths["output"] = output_dir
-
-    # === Phase 2: Strip vocals if requested ===
-    if strip_vocals:
-        instr_mp3 = mp3_path.with_name(f"{mp3_path.stem}_instrumental.mp3")
-        if instr_mp3.exists():
-            print(f"✅ Instrumental already exists: {instr_mp3}")
+    # ===== 🎚️ STRIP VOCALS IF NEEDED =====
+    instrumental_path = f"{args.title}_instrumental.mp3"
+    if args.strip_vocals:
+        if os.path.exists(instrumental_path):
+            print(f"✅ Instrumental already exists: {instrumental_path}")
         else:
-            cmd = ["python3", "karaoke_maker.py", str(mp3_path)]
-            if no_prompt: cmd.append("--no-prompt")
-            run(cmd)
-            if not instr_mp3.exists():
-                sys.exit(f"❌ Expected instrumental file not found: {instr_mp3}")
+            print("\n🎙️ Stripping vocals using Demucs...")
+            run(f'demucs --two-stems=vocals "{mp3_path}"')
+            demucs_dir = Path("separated") / "htdemucs"
+            stem_dir = next(demucs_dir.glob("*"), None)
+            if stem_dir:
+                src = stem_dir / "no_vocals.wav"
+                if src.exists():
+                    run(f'ffmpeg -y -i "{src}" -vn -ar 44100 -ac 2 -b:a 192k "{instrumental_path}"')
+                    print(f"✅ Saved instrumental: {instrumental_path}")
+                else:
+                    print("⚠️ Demucs output missing — using original audio.")
+                    instrumental_path = mp3_path
     else:
-        instr_mp3 = mp3_path
+        if os.path.exists(instrumental_path):
+            print(f"✅ Using existing instrumental: {instrumental_path}")
+        else:
+            instrumental_path = mp3_path
 
-    # === Phase 3: Generate karaoke video ===
-    print(f"\n🎬 Generating karaoke video using: {lyrics_txt_path}\n")
-    cmd = [
-        "python3", "karaoke_core.py",
-        "--lyrics-txt", lyrics_txt_path,
-        "--mp3", str(instr_mp3),
-    ]
-    if artist: cmd += ["--artist", artist]
-    if title: cmd += ["--title", title]
-    if offset: cmd += ["--offset", str(offset)]
-    if no_prompt: cmd.append("--no-prompt")
-    cmd.append("--autoplay")
+    # ===== 🎬 GENERATE KARAOKE VIDEO =====
+    print("\n🎬 Generating karaoke video using:", f"{info['lyrics']}/FINAL_{sanitize_name(args.artist)}_{sanitize_name(args.title)}.txt")
+    core_cmd = (
+        f'python3 karaoke_core.py '
+        f'--lyrics-txt "{info["lyrics"]}/FINAL_{sanitize_name(args.artist)}_{sanitize_name(args.title)}.txt" '
+        f'--mp3 "{instrumental_path}" '
+        f'--artist "{args.artist}" '
+        f'--title "{args.title}" '
+        f'--offset {args.offset} '
+    )
+    if args.no_prompt:
+        core_cmd += "--no-prompt "
+    if args.autoplay:
+        core_cmd += "--autoplay "
 
-    run(cmd)
-    print(f"\n✅ Done! Output in: {os.path.abspath(paths['output'])}\n")
+    run(core_cmd)
+
 
 if __name__ == "__main__":
-    try:
-        main()
-    except subprocess.CalledProcessError as e:
-        print(f"\n❌ Command failed: {e}")
-        sys.exit(1)
+    main()
