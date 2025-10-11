@@ -10,12 +10,11 @@ import os, sys, subprocess, shutil, time
 
 VENV_DIR = "demucs_env"
 REQUIREMENTS = "requirements.txt"
-CACHE_DIRS = [
-    "__pycache__",
-    "*/__pycache__",
-    "songs/__pycache__",
-    "demucs_env/lib/python3.13/site-packages/__pycache__"
-]
+
+def color(text, code): return f"\033[{code}m{text}\033[0m"
+def green(t): return color(t, "92")
+def yellow(t): return color(t, "93")
+def red(t): return color(t, "91")
 
 def run(cmd, **kwargs):
     print("▶️", " ".join(cmd))
@@ -23,7 +22,7 @@ def run(cmd, **kwargs):
 
 def ensure_requirements():
     if not os.path.exists(REQUIREMENTS):
-        print(f"⚠️ {REQUIREMENTS} not found, creating default one.")
+        print(yellow(f"⚠️ {REQUIREMENTS} not found, creating default one."))
         with open(REQUIREMENTS, "w") as f:
             f.write("""requests
 soundfile
@@ -34,11 +33,20 @@ ffmpeg-python
 tqdm
 yt-dlp
 """)
-    print(f"✅ Requirements file ready: {REQUIREMENTS}")
+    else:
+        with open(REQUIREMENTS) as f:
+            contents = f.read()
+        # Add torch for M-series Macs if missing
+        if "torch" not in contents:
+            with open(REQUIREMENTS, "a") as f:
+                f.write("torch\ntorchaudio\n")
+            print(yellow("🧩 Added torch + torchaudio to requirements."))
+
+    print(green(f"✅ Requirements file ready: {REQUIREMENTS}\n"))
 
 def purge_pycache():
     print("🧹 Clearing stale Python caches...")
-    for root, dirs, files in os.walk("."):
+    for root, dirs, _ in os.walk("."):
         if "__pycache__" in dirs:
             full = os.path.join(root, "__pycache__")
             try:
@@ -46,26 +54,30 @@ def purge_pycache():
                 print(f"  🗑️  Removed: {full}")
             except Exception:
                 pass
-    print("✅ Caches cleared.\n")
+    print(green("✅ Caches cleared.\n"))
 
-def rebuild_env():
-    # 🧹 Remove old environment safely
+def rebuild_env(force=False):
+    """Rebuild virtual environment if missing or forced."""
+    if os.path.isdir(VENV_DIR) and not force:
+        print(green(f"✅ Virtual environment already exists: {VENV_DIR}\n"))
+        return
+
     if os.path.isdir(VENV_DIR):
-        print(f"🧹 Removing old virtual environment: {VENV_DIR}")
+        print(yellow(f"🧹 Removing old virtual environment: {VENV_DIR}"))
         shutil.rmtree(VENV_DIR, ignore_errors=True)
 
-    # 🧱 Create a fresh environment
-    print(f"🧱 Creating fresh virtual environment: {VENV_DIR}")
+    print("🧱 Creating fresh virtual environment:", VENV_DIR)
     run([sys.executable, "-m", "venv", VENV_DIR])
 
     pip_exe = os.path.join(VENV_DIR, "bin", "pip")
     print("📦 Installing dependencies...")
     run([pip_exe, "install", "-U", "pip", "wheel", "setuptools"])
     run([pip_exe, "install", "-r", REQUIREMENTS])
+    print(green("\n✅ Environment fully rebuilt.\n"))
 
 def main():
-    # ☕ Step 1: Clean up caches first
     purge_pycache()
+    ensure_requirements()
 
     # Detect if we’re inside the venv we want to rebuild
     inside_venv = (
@@ -74,16 +86,13 @@ def main():
     )
 
     if inside_venv:
-        print("⚠️ Detected you’re running inside the environment being rebuilt.")
+        print(yellow("⚠️ Detected you’re running inside the environment being rebuilt."))
         print("🔄 Relaunching from system Python…\n")
-
         envless_python = "/usr/bin/python3" if os.path.exists("/usr/bin/python3") else "python3"
         cmd = [envless_python, __file__] + sys.argv[1:]
         os.execvp(cmd[0], cmd)
         return
 
-    # Normal flow: outside venv, full setup
-    ensure_requirements()
     rebuild_env()
 
     py_exe = os.path.join(VENV_DIR, "bin", "python")
@@ -92,12 +101,13 @@ def main():
         print("\n🎶 Running karaoke_generator.py with your arguments…\n")
         run([py_exe, "karaoke_generator.py"] + sys.argv[1:])
     else:
-        print(f"\n✅ Environment ready!")
-        print(f"Run manually:\n   python3 karaoke_start.py \"your_song.mp3\" --artist \"Artist\" --title \"Song Title\" --strip-vocals")
+        print(green("\n✅ Environment ready!"))
+        print("Run manually:\n"
+              '   python3 karaoke_start.py "your_song.mp3" --artist "Artist" --title "Song Title" --strip-vocals')
 
 if __name__ == "__main__":
     try:
         main()
     except subprocess.CalledProcessError as e:
-        print(f"\n❌ Command failed: {e}")
+        print(red(f"\n❌ Command failed: {e}"))
         sys.exit(1)
