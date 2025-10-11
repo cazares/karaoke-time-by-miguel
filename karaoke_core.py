@@ -1,13 +1,12 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-karaoke_core.py — shared logic for Karaoke Time
-Manual tap-to-time workflow + optional reuse of saved timings.
+karaoke_core.py — tap-to-time and render karaoke videos with ffmpeg.
 """
 
 import csv, os, subprocess, sys, time
 from datetime import datetime
-from typing import List, Tuple, Optional
+from typing import List
 
 # Tuned defaults
 FONT_SIZE = 140
@@ -39,7 +38,7 @@ def fmt_time_ass(s: float) -> str:
     return f"{h}:{m:02d}:{sec:05.2f}"
 
 def load_lyrics_txt(path: str) -> List[str]:
-    texts: List[str] = []
+    texts = []
     with open(path, "r", encoding="utf-8") as f:
         for raw in f.read().splitlines():
             t = raw.strip()
@@ -49,16 +48,16 @@ def load_lyrics_txt(path: str) -> List[str]:
     return texts
 
 def tap_collect_times(texts: List[str]) -> List[float]:
-    print("\n🎤 TAP-TO-TIME MODE\n• Press Enter once per lyric.\n• First press starts the clock.\n• Type 'q' + Enter to abort.\n")
-    input("Ready? Press Enter to ARM the clock… ")
+    print("\n🎤 TAP MODE — Press Enter for each lyric line. Type 'q' to quit.\n")
+    input("Ready? Press Enter to start… ")
     t0 = time.perf_counter()
-    starts: List[float] = []
+    starts = []
     for idx, text in enumerate(texts, start=1):
         print(f"\n==== Block {idx}/{len(texts)} ====")
         print(text)
         s = input("Press Enter to timestamp (or 'q' to quit): ")
         if s.strip().lower() == "q":
-            print("Aborted."); sys.exit(1)
+            sys.exit("Aborted.")
         t = time.perf_counter() - t0
         starts.append(t)
         print(f"⏱ {t:.2f}s")
@@ -75,7 +74,6 @@ def compute_rows_from_starts(starts, texts, spacing_sec, buffer_sec):
     return rows
 
 def write_ass(rows, ass_path, font_size, fade_in_ms, fade_out_ms):
-    print(f"📝 Writing ASS: {ass_path}")
     with open(ass_path, "w", encoding="utf-8") as f:
         f.write(ass_header(font_size))
         for (start, end, text) in rows:
@@ -91,108 +89,48 @@ def render_video(mp3_path, ass_path, prefix, out_dir):
     out_name = f"{prefix}{stamp}_{base}.mp4"
     out_path = os.path.join(out_dir, out_name)
 
-    # ✅ Lyric + Timing Workflow
     txt_path = ass_path
     ass_path = os.path.splitext(txt_path)[0] + ".ass"
     csv_path = os.path.join(os.path.dirname(txt_path), "lyrics_timing.csv")
     texts = load_lyrics_txt(txt_path)
 
-    # 🎵 Insert title card at the beginning (smart parsing)
-    filename = os.path.splitext(os.path.basename(txt_path))[0]
-    filename = filename.replace("FINAL_", "").replace("auto_", "")
-    artist_clean = "Unknown Artist"
-    title_clean = filename.replace("_", " ").strip()
-
-    # Prefer directory-based naming (Artist__Title)
-    parent_dir = os.path.basename(os.path.dirname(txt_path))
-    if "__" in parent_dir:
-        parts = parent_dir.split("__", 1)
-        if len(parts) == 2:
-            artist_clean = parts[0].replace("_", " ").strip()
-            title_clean = parts[1].replace("_", " ").strip()
-
-    intro_block = f"{title_clean}\\N\\Nby\\N\\N{artist_clean}"
+    # Smart intro block
+    parent = os.path.basename(os.path.dirname(txt_path))
+    if "__" in parent:
+        artist, title = parent.split("__", 1)
+        intro_block = f"{title.replace('_',' ')}\\N\\Nby\\N\\N{artist.replace('_',' ')}"
+    else:
+        intro_block = f"{base}\\N\\Nby\\N\\NUnknown Artist"
     texts.insert(0, intro_block)
 
-    # ⏱ Reuse if available
-    if os.path.exists(csv_path):
-        choice = input(f"\n🟡 Detected existing timing file:\n   {csv_path}\nReuse it? (Y/n): ").strip().lower()
-        if choice in ("", "y", "yes"):
-            starts = []
-            with open(csv_path, "r", encoding="utf-8") as f:
-                next(f)
-                for line in csv.reader(f):
-                    try:
-                        starts.append(float(line[0]))
-                    except:
-                        continue
-            print(f"✅ Reused {len(starts)} timestamps from previous run.")
-        else:
-            starts = tap_collect_times(texts)
-    else:
-        starts = tap_collect_times(texts)
-
-    # 💾 Always save the timings
+    starts = tap_collect_times(texts)
     with open(csv_path, "w", encoding="utf-8", newline="") as f:
-        writer = csv.writer(f)
-        writer.writerow(["StartTime(sec)", "Lyric"])
-        for s, lyric in zip(starts, texts):
-            writer.writerow([f"{s:.3f}", lyric])
-    print(f"💾 Saved tapped timings to: {csv_path}")
+        writer = csv.writer(f); writer.writerow(["Start(sec)", "Lyric"])
+        for s, lyric in zip(starts, texts): writer.writerow([f"{s:.3f}", lyric])
 
     rows = compute_rows_from_starts(starts, texts, SPACING, BUFFER_SEC)
-    write_ass(rows, ass_path, FONT_SIZE, int(FADE_IN * 1000), int(FADE_OUT * 1000))
+    write_ass(rows, ass_path, FONT_SIZE, int(FADE_IN*1000), int(FADE_OUT*1000))
 
-    # ✅ Render with ffmpeg
     subprocess.run([
         "ffmpeg", "-y",
         "-f", "lavfi", "-i", "color=c=black:s=1920x1080:r=30",
         "-i", str(mp3_path),
         "-vf", f"ass={ass_path}",
-        "-map", "0:v:0",
-        "-map", "1:a:0",
+        "-map", "0:v:0", "-map", "1:a:0",
         "-c:v", "libx264", "-preset", "fast", "-tune", "stillimage",
         "-c:a", "aac", "-b:a", "192k",
-        "-shortest", "-movflags", "+faststart",
-        str(out_path)
+        "-shortest", "-movflags", "+faststart", str(out_path)
     ], check=True)
 
     print(f"\n✅ Rendered: {out_path}")
 
-# === CLI ENTRY ===
 if __name__ == "__main__":
-    import argparse, subprocess
-
-    parser = argparse.ArgumentParser(description="Render karaoke video with optional reused timing CSV")
-    parser.add_argument("--lyrics-txt", required=True, help="Path to FINAL_ lyrics file")
-    parser.add_argument("--mp3", required=True, help="Path to MP3 file")
-    parser.add_argument("--prefix", default="non_interactive_", help="Output filename prefix")
-    parser.add_argument("--out-dir", default="output", help="Output directory")
-    parser.add_argument("--autoplay", action="store_true", help="Automatically open the rendered video")
+    import argparse
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--lyrics-txt", required=True)
+    parser.add_argument("--mp3", required=True)
+    parser.add_argument("--prefix", default="non_interactive_")
+    parser.add_argument("--out-dir", default="output")
+    parser.add_argument("--autoplay", action="store_true")
     args = parser.parse_args()
-
-    try:
-        render_video(args.mp3, args.lyrics_txt, args.prefix, args.out_dir)
-        print(f"\n✅ Render complete!")
-
-        # === Optional autoplay ===
-        if args.autoplay:
-            out_dir_abs = os.path.abspath(args.out_dir)
-            newest = max(
-                (os.path.join(out_dir_abs, f) for f in os.listdir(out_dir_abs)),
-                key=os.path.getmtime,
-            )
-            print(f"🎬 Autoplay: {newest}")
-            try:
-                subprocess.run(["open", "-a", "QuickTime Player", newest])
-            except Exception:
-                try:
-                    subprocess.run(["open", "-a", "Preview", newest])
-                except Exception:
-                    subprocess.run(["open", "-R", newest])
-    except subprocess.CalledProcessError as e:
-        print(f"\n❌ ffmpeg failed with error: {e}")
-        sys.exit(1)
-    except Exception as e:
-        print(f"\n⚠️ Unexpected error: {e}")
-        sys.exit(1)
+    render_video(args.mp3, args.lyrics_txt, args.prefix, args.out_dir)
