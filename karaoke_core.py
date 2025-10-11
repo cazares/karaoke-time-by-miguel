@@ -16,17 +16,22 @@ def seconds_to_ass(ts):
     return f"0:{int(m):02d}:{s:05.2f}".replace('.', ',')
 
 def render_karaoke_video(audio_path, ass_path, output_path, font_name, font_size):
-    """Run FFmpeg to render final karaoke MP4 automatically."""
+    """Render universally compatible karaoke video (QuickTime + VLC + web-safe)."""
     print(f"\n🎬 Rendering karaoke video to {output_path}...")
+
     ffmpeg_cmd = f"""
-        ffmpeg -f lavfi -i color=c=black:size=1280x720 \
+        ffmpeg -y \
+        -f lavfi -i color=c=black:size=1280x720:rate=30 \
         -i "{audio_path}" \
         -vf "subtitles={ass_path}:force_style='Fontsize={font_size},Fontname={font_name}'" \
-        -c:a aac -shortest -movflags +faststart "{output_path}"
+        -c:v libx264 -pix_fmt yuv420p -profile:v baseline -level 3.0 \
+        -c:a aac -b:a 192k \
+        -shortest -movflags +faststart "{output_path}"
     """
+
     try:
         subprocess.run(shlex.split(ffmpeg_cmd), check=True)
-        print(f"✅ Karaoke video created: {output_path}\n")
+        print(f"✅ Karaoke video created (universal playback): {output_path}\n")
     except subprocess.CalledProcessError as e:
         print(f"❌ FFmpeg failed: {e}")
 
