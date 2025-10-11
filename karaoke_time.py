@@ -1,60 +1,74 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-karaoke_time.py — lyric management and orchestration layer
-Bridges between karaoke_generator.py and karaoke_lyric_fetcher.py.
-Keeps backward compatibility with --debug, --test-lyric-fetching, and
---override-lyric-fetch-txt. Always provides a ready-to-use lyrics file.
+karaoke_time.py — interactive tap-timing helper for Karaoke Time
+Handles ENTER-based timing capture and ASS/MP4 generation.
+Called automatically from karaoke_generator.py or used manually.
 """
 
-import os, sys, time
+import argparse, csv, sys, os, time, subprocess
 from pathlib import Path
-from karaoke_lyric_fetcher import handle_auto_lyrics
 
-DEBUG = "--debug" in sys.argv
-FORCE_REFETCH = "--test-lyric-fetching" in sys.argv
-OVERRIDE_TXT = None
+def tap_mode(lyrics_path: Path, output_csv: Path, offset: float = 0.0):
+    """Tap ENTER in rhythm with each lyric line to timestamp it."""
+    print("\n🎹 Tap mode: Press ENTER in rhythm with each lyric line.")
+    print("Press ENTER to start...")
+    input()
 
-for i, arg in enumerate(sys.argv):
-    if arg == "--override-lyric-fetch-txt" and i + 1 < len(sys.argv):
-        OVERRIDE_TXT = Path(sys.argv[i + 1]).expanduser()
+    start_time = time.time()
+    timestamps = []
+    lines = [l.strip() for l in lyrics_path.read_text(encoding="utf-8").splitlines() if l.strip()]
 
-DEBUG_LOG = None
-if DEBUG:
-    ts = time.strftime("%Y-%m-%d_%H-%M-%S")
-    DEBUG_LOG = f"lyrics_debug_{ts}.log"
-    print(f"🧾 Debug log file: {DEBUG_LOG}")
+    for idx, line in enumerate(lines):
+        input(f"🎵 {line}\n")
+        ts = time.time() - start_time + offset
+        timestamps.append((ts, line))
+        print(f"🕒 {ts:.2f}s — recorded")
 
-def debug_write(label, content):
-    if DEBUG:
-        try:
-            with open(DEBUG_LOG, "a", encoding="utf-8") as f:
-                f.write(f"\n[{time.strftime('%H:%M:%S')}] {label}\n{content}\n")
-        except Exception:
-            pass
+    # Write to CSV
+    with open(output_csv, "w", newline="", encoding="utf-8") as f:
+        writer = csv.DictWriter(f, fieldnames=["timestamp", "text"])
+        writer.writeheader()
+        for ts, line in timestamps:
+            writer.writerow({"timestamp": f"{ts:.3f}", "text": line})
 
-def main(mp3_path=None, artist=None, title=None):
-    """Handles lyric retrieval or override logic."""
-    if OVERRIDE_TXT and OVERRIDE_TXT.exists():
-        print(f"🎯 Using override lyric file: {OVERRIDE_TXT}")
-        lyrics_text = OVERRIDE_TXT.read_text(encoding="utf-8")
-        return lyrics_text, {"lyrics": str(OVERRIDE_TXT.parent)}
+    print(f"\n✅ Tap timing complete — saved to {output_csv}")
+    return output_csv
 
-    print(f"\n🎵 Fetching lyrics for: {artist} — {title}")
-    lyrics_text, info = handle_auto_lyrics(
-        mp3_path=mp3_path,
-        artist=artist,
-        title=title,
-        force_refetch=FORCE_REFETCH,
-        debug_log=DEBUG_LOG,
+def render_ass_and_video(csv_path: Path, mp3_path: Path, font_size: int = 140):
+    """Automatically invoke karaoke_core.py to create ASS + MP4."""
+    cmd = (
+        f'python3 karaoke_core.py '
+        f'--csv "{csv_path}" '
+        f'--mp3 "{mp3_path}" '
+        f'--font-size {font_size}'
     )
+    print(f"\n🎬 Running FFmpeg render pipeline:\n▶️ {cmd}")
+    subprocess.run(cmd, shell=True, check=False)
 
-    if not lyrics_text.strip():
-        sys.exit("❌ No lyrics fetched or provided.")
+def main():
+    parser = argparse.ArgumentParser(description="Interactive tap-timing for Karaoke Time")
+    parser.add_argument("--lyrics-txt", required=True, help="Path to lyrics .txt file")
+    parser.add_argument("--mp3", required=True, help="Path to source audio file")
+    parser.add_argument("--offset", type=float, default=0.0, help="Global timing offset (seconds)")
+    parser.add_argument("--font-size", type=int, default=140, help="Font size for lyrics text")
+    parser.add_argument("--debug", action="store_true", help="Enable verbose mode for diagnostics")
+    args = parser.parse_args()
 
-    debug_write("Final Lyrics Text", lyrics_text[:1000])
-    print(f"✅ Ready lyrics file located in: {info['lyrics']}")
-    return lyrics_text, info
+    lyrics_path = Path(args.lyrics_txt)
+    csv_path = lyrics_path.with_suffix(".csv")
+
+    # 🧭 Tap to create CSV
+    tap_mode(lyrics_path, csv_path, offset=args.offset)
+
+    # 🎞️ Then generate video
+    render_ass_and_video(csv_path, Path(args.mp3), font_size=args.font_size)
 
 if __name__ == "__main__":
-    print("⚙️  karaoke_time.py is a helper; use karaoke_generator.py instead.")
+    try:
+        main()
+    except KeyboardInterrupt:
+        print("\n👋 Exiting tap mode gracefully.")
+        sys.exit(0)
+
+# end of karaoke_time.py

@@ -118,7 +118,6 @@ def main():
             lyrics_text = lyrics_txt_path.read_text(encoding="utf-8")
             final_txt_path = lyrics_txt_path
 
-
     print(f"✅ Using lyrics file: {final_txt_path}")
 
     # 🎚️ Strip vocals if requested
@@ -154,6 +153,7 @@ def main():
     )
     run(core_cmd)
 
+    # ✅ Finder/Autoplay
     if args.autoplay:
         print("\n🎵 Autoplay enabled — opening in QuickTime…")
         run(f'open -a "QuickTime Player" "output/{Path(instrumental_path).stem}_karaoke.mp4"')
