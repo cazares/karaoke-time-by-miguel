@@ -3,37 +3,22 @@
 """
 karaoke_auto_sync_lyrics.py
 -----------------------------------
-Bridges fetched lyrics and MP3 into a time-aligned CSV file for Karaoke Time.
+Auto-aligns lyrics and audio into a time-synced CSV for Karaoke Time.
 
 Usage:
     python3 karaoke_auto_sync_lyrics.py --artist "John Frusciante" --title "The Past Recedes"
-
-Expected paths:
-    lyrics/john_frusciante_the_past_recedes.txt
-    songs/john_frusciante_the_past_recedes.mp3
-
-Output:
-    lyrics/john_frusciante_the_past_recedes_synced.csv
 """
 
 import os, sys, argparse, subprocess, json, re
 from pathlib import Path
 from rapidfuzz import process, fuzz
 
-# ------------------------------------------------------------
-# Utility helpers
-# ------------------------------------------------------------
-
 def slugify(text: str) -> str:
     return text.lower().replace(" ", "_").replace("'", "").replace('"', '')
 
 def run_with_progress(cmd: list[str], label: str):
-    """
-    Runs a subprocess and shows a simple progress log every few seconds.
-    """
     print(f"\n▶️ {label}: {' '.join(cmd)}\n")
     process_ = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
-
     pattern = re.compile(r'(\d{1,3}\.\d+)%|size=.*time=.*bitrate=')
     while True:
         line = process_.stdout.readline()
@@ -47,12 +32,7 @@ def run_with_progress(cmd: list[str], label: str):
         raise subprocess.CalledProcessError(process_.returncode, cmd)
     print(f"✅ {label} complete.\n")
 
-# ------------------------------------------------------------
-# Core processing
-# ------------------------------------------------------------
-
 def separate_vocals(mp3_path: Path) -> Path:
-    """Run Demucs and return path to vocals.wav"""
     print("🎶 Step 1: Separating vocals with Demucs...")
     run_with_progress(["demucs", str(mp3_path), "-n", "htdemucs_ft"], "Demucs")
     vocals = Path("separated/htdemucs_ft") / mp3_path.stem / "vocals.wav"
@@ -63,7 +43,6 @@ def separate_vocals(mp3_path: Path) -> Path:
     return vocals
 
 def transcribe_with_whisper(vocals_path: Path, json_out: Path):
-    """Run Whisper transcription and save JSON output"""
     print("🧠 Step 2: Transcribing vocals with Whisper (medium model)...")
     cmd = [
         "whisper", str(vocals_path),
@@ -80,19 +59,13 @@ def transcribe_with_whisper(vocals_path: Path, json_out: Path):
     return json_out
 
 def align_lyrics_to_transcript(lyrics_txt: Path, transcript_json: Path, csv_out: Path):
-    """Align Whisper transcript to known lyrics using RapidFuzz"""
     print("🪄 Step 3: Aligning lyrics to Whisper transcript...")
-
-    # Load lyrics
     with open(lyrics_txt, "r", encoding="utf-8") as f:
         lyrics_lines = [line.strip() for line in f if line.strip()]
-
-    # Load Whisper transcript
     with open(transcript_json, "r", encoding="utf-8") as f:
         data = json.load(f)
     segments = data.get("segments", data)
 
-    # Build aligned CSV
     rows = []
     for line in lyrics_lines:
         best = process.extractOne(line, [s["text"] for s in segments], scorer=fuzz.partial_ratio)
@@ -104,17 +77,12 @@ def align_lyrics_to_transcript(lyrics_txt: Path, transcript_json: Path, csv_out:
         else:
             rows.append(("", "", line))
 
-    # Write CSV
     with open(csv_out, "w", encoding="utf-8") as f:
         for start, end, text in rows:
             f.write(f"{start},{end},{text}\n")
 
     print(f"✅ Synced CSV written to: {csv_out}")
     return csv_out
-
-# ------------------------------------------------------------
-# Main
-# ------------------------------------------------------------
 
 def main():
     parser = argparse.ArgumentParser(description="Auto-sync lyrics and audio for Karaoke Time")
