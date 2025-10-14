@@ -16,7 +16,7 @@ Output:
     lyrics/john_frusciante_the_past_recedes_synced.csv
 """
 
-import os, sys, argparse, subprocess, json
+import os, sys, argparse, subprocess, json, re
 from pathlib import Path
 from rapidfuzz import process, fuzz
 
@@ -27,9 +27,25 @@ from rapidfuzz import process, fuzz
 def slugify(text: str) -> str:
     return text.lower().replace(" ", "_").replace("'", "").replace('"', '')
 
-def run(cmd: str):
-    print(f"\n▶️ {cmd}")
-    subprocess.run(cmd, shell=True, check=True)
+def run_with_progress(cmd: list[str], label: str):
+    """
+    Runs a subprocess and shows a simple progress log every few seconds.
+    """
+    print(f"\n▶️ {label}: {' '.join(cmd)}\n")
+    process_ = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
+
+    pattern = re.compile(r'(\d{1,3}\.\d+)%|size=.*time=.*bitrate=')
+    while True:
+        line = process_.stdout.readline()
+        if not line:
+            break
+        line = line.strip()
+        if pattern.search(line):
+            print(f"   {label}: {line}", flush=True)
+    process_.wait()
+    if process_.returncode != 0:
+        raise subprocess.CalledProcessError(process_.returncode, cmd)
+    print(f"✅ {label} complete.\n")
 
 # ------------------------------------------------------------
 # Core processing
@@ -37,11 +53,10 @@ def run(cmd: str):
 
 def separate_vocals(mp3_path: Path) -> Path:
     """Run Demucs and return path to vocals.wav"""
-    print("🎶 Separating vocals with Demucs...")
-    run(f'demucs "{mp3_path}" -n htdemucs_ft')
+    print("🎶 Step 1: Separating vocals with Demucs...")
+    run_with_progress(["demucs", str(mp3_path), "-n", "htdemucs_ft"], "Demucs")
     vocals = Path("separated/htdemucs_ft") / mp3_path.stem / "vocals.wav"
     if not vocals.exists():
-        # fallback to generic folder name
         vocals = Path("separated/htdemucs") / mp3_path.stem / "vocals.wav"
     if not vocals.exists():
         raise FileNotFoundError("❌ Vocals file not found after Demucs run.")
@@ -49,8 +64,15 @@ def separate_vocals(mp3_path: Path) -> Path:
 
 def transcribe_with_whisper(vocals_path: Path, json_out: Path):
     """Run Whisper transcription and save JSON output"""
-    print("🧠 Transcribing vocals with Whisper...")
-    run(f'whisper "{vocals_path}" --model medium --language en --output_format json --output_dir "{json_out.parent}"')
+    print("🧠 Step 2: Transcribing vocals with Whisper (medium model)...")
+    cmd = [
+        "whisper", str(vocals_path),
+        "--model", "medium",
+        "--language", "en",
+        "--output_format", "json",
+        "--output_dir", str(json_out.parent)
+    ]
+    run_with_progress(cmd, "Whisper")
     generated = json_out.parent / f"{vocals_path.stem}.json"
     if not generated.exists():
         raise FileNotFoundError("❌ Whisper output JSON not found.")
@@ -59,7 +81,7 @@ def transcribe_with_whisper(vocals_path: Path, json_out: Path):
 
 def align_lyrics_to_transcript(lyrics_txt: Path, transcript_json: Path, csv_out: Path):
     """Align Whisper transcript to known lyrics using RapidFuzz"""
-    print("🪄 Aligning lyrics to Whisper transcript...")
+    print("🪄 Step 3: Aligning lyrics to Whisper transcript...")
 
     # Load lyrics
     with open(lyrics_txt, "r", encoding="utf-8") as f:
@@ -67,21 +89,17 @@ def align_lyrics_to_transcript(lyrics_txt: Path, transcript_json: Path, csv_out:
 
     # Load Whisper transcript
     with open(transcript_json, "r", encoding="utf-8") as f:
-        transcript_data = json.load(f)
-    segments = transcript_data.get("segments", transcript_data)  # support both whisper & whisperx JSON formats
+        data = json.load(f)
+    segments = data.get("segments", data)
 
     # Build aligned CSV
     rows = []
     for line in lyrics_lines:
-        best = process.extractOne(
-            line, [seg["text"] for seg in segments],
-            scorer=fuzz.partial_ratio
-        )
+        best = process.extractOne(line, [s["text"] for s in segments], scorer=fuzz.partial_ratio)
         if best:
-            matched_text = best[0]
-            matched_seg = next(s for s in segments if s["text"] == matched_text)
-            start = matched_seg.get("start", 0)
-            end = matched_seg.get("end", start + 2)
+            seg = next(s for s in segments if s["text"] == best[0])
+            start = seg.get("start", 0)
+            end = seg.get("end", start + 2)
             rows.append((start, end, line))
         else:
             rows.append(("", "", line))
@@ -119,6 +137,10 @@ def main():
     if not mp3_path.exists():
         print(f"❌ MP3 file not found: {mp3_path}")
         sys.exit(1)
+
+    print(f"\n🎤 Processing: {args.artist} — {args.title}")
+    print(f"   Lyrics: {lyrics_txt}")
+    print(f"   Audio : {mp3_path}")
 
     vocals_path = separate_vocals(mp3_path)
     transcript_json = transcribe_with_whisper(vocals_path, json_out)

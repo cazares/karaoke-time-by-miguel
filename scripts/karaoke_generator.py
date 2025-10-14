@@ -99,12 +99,12 @@ def main():
     # --- Step 1: Handle YouTube download (if URL found) ---
     if args.youtube_url:
         print(f"🎧 Downloading audio from YouTube…\n")
-        yt_cmd = f'yt-dlp -x --audio-format mp3 -o "{args.title}.mp3" "{args.youtube_url}"'
+        yt_cmd = f'yt-dlp -x --audio-format mp3 -o "songs/{sanitize_name(args.artist)}_{sanitize_name(args.title)}.mp3" "{args.youtube_url}"'
         result = subprocess.run(shlex.split(yt_cmd))
         if result.returncode != 0:
             print("❌ Failed to download from YouTube — aborting.")
             sys.exit(1)
-        args.mp3 = f"{args.title}.mp3"
+        args.mp3 = f"songs/{sanitize_name(args.artist)}_{sanitize_name(args.title)}.mp3"
         print(f"✅ Download complete → {args.mp3}\n")
     else:
         if not args.mp3 or not os.path.exists(args.mp3):
@@ -134,6 +134,13 @@ def main():
             f'--output "{lyrics_path}" '
             f'--genius-token "{args.genius_token}"'
         )
+    # --- Step 3.5: Auto-sync lyrics to audio ---
+    print("\n🪄 Auto-syncing lyrics and audio into CSV (karaoke_auto_sync_lyrics.py)...")
+    subprocess.run([
+        "python3", "karaoke_auto_sync_lyrics.py",
+        "--artist", args.artist,
+        "--title", args.title
+    ], check=True)
 
     # --- Step 4: Interactive tap or direct conversion ---
     if not args.no_tap:
