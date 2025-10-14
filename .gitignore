@@ -5,3 +5,8 @@ __pycache__/
 *.log
 *.DS_Store
 *.pyc
+*.zip
+*.mp3
+*.wav
+*demucs*
+*.txt*.mp3
