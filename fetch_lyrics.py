@@ -1,10 +1,9 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
-"""
+r"""
 fetch_lyrics.py — fetches lyrics from Genius and writes them to a file.
-Automatically prepends:
-    [title]\n\nby\n\n[artist]
-to the output.
+Prepends a single line at the top in literal \N format, e.g.:
+    The Past Recedes\N\Nby\N\NJohn Frusciante
 """
 
 import argparse
@@ -87,13 +86,13 @@ def main():
             print("Fallback scrape failed.", file=sys.stderr)
             sys.exit(1)
 
-    # prepend formatted header
-    header = f"{args.title}\n\nby\n\n{args.artist}\n\n"
-    lyrics = header + lyrics.strip() + "\n"
+    # prepend literal \N header (single line)
+    header_line = f"{args.title}\\N\\Nby\\N\\N{args.artist}\n"
+    full_output = header_line + lyrics.strip() + "\n"
 
     try:
         with open(args.output, "w", encoding="utf-8") as f:
-            f.write(lyrics)
+            f.write(full_output)
     except Exception as e:
         print(f"Error writing file {args.output}: {e}", file=sys.stderr)
         sys.exit(1)
