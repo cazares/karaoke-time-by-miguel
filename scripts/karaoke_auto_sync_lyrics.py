@@ -8,7 +8,12 @@ Steps:
   1. Separate vocals using Demucs
   2. Transcribe vocals with Whisper (JSON)
   3. Align Genius lyrics with timestamps (CSV output)
-Now includes live streaming output, detailed logging, and Whisper output auto-detection.
+
+Includes:
+  ✅ Live streaming + logging
+  ✅ Smart caching (skip heavy steps if outputs exist)
+  ✅ --clear-cache flag to force full reprocessing
+  ✅ Auto Whisper output detection for cross-version compatibility
 """
 
 import os, sys, subprocess, csv, re, datetime, shutil
@@ -56,11 +61,17 @@ for tool in ["demucs", "whisper"]:
 # -------------------------------------------------------------------------
 # Step 1: Vocal separation (Demucs)
 # -------------------------------------------------------------------------
-def separate_vocals(song_path: str):
-    print(f"🎶 Step 1: Separating vocals with Demucs...")
-    run_with_progress(["demucs", song_path, "-n", "htdemucs_ft"], "Demucs")
+def separate_vocals(song_path: str, clear_cache: bool = False):
     stem_dir = Path("separated") / "htdemucs_ft" / Path(song_path).stem
     vocals_path = stem_dir / "vocals.wav"
+
+    if vocals_path.exists() and not clear_cache:
+        print(f"🌀 Using cached Demucs output → {vocals_path}")
+        return vocals_path
+
+    print(f"🎶 Step 1: Separating vocals with Demucs...")
+    run_with_progress(["demucs", song_path, "-n", "htdemucs_ft"], "Demucs")
+
     if not vocals_path.exists():
         raise FileNotFoundError(f"❌ Expected vocals track not found: {vocals_path}")
     print(f"✅ Demucs output: {vocals_path}")
@@ -69,12 +80,18 @@ def separate_vocals(song_path: str):
 # -------------------------------------------------------------------------
 # Step 2: Transcription (Whisper)
 # -------------------------------------------------------------------------
-def transcribe_with_whisper(vocals_path: Path, output_dir: Path):
-    print(f"🧠 Step 2: Transcribing vocals with Whisper (medium model)...")
+def transcribe_with_whisper(vocals_path: Path, output_dir: Path, clear_cache: bool = False):
     expected_base = vocals_path.stem
     json_out_custom = output_dir / f"{expected_base}_whisper.json"
     json_out_default = output_dir / f"{expected_base}.json"
 
+    # If existing transcript found, skip unless --clear-cache
+    if (json_out_custom.exists() or json_out_default.exists()) and not clear_cache:
+        found = json_out_custom if json_out_custom.exists() else json_out_default
+        print(f"🌀 Using cached Whisper transcript → {found}")
+        return found
+
+    print(f"🧠 Step 2: Transcribing vocals with Whisper (medium model)...")
     cmd = [
         "whisper",
         str(vocals_path),
@@ -83,7 +100,6 @@ def transcribe_with_whisper(vocals_path: Path, output_dir: Path):
         "--output_format", "json",
         "--output_dir", str(output_dir)
     ]
-
     run_with_progress(cmd, "Whisper")
 
     # Detect whichever Whisper filename convention was used
@@ -129,6 +145,7 @@ def main():
     parser = argparse.ArgumentParser(description="Auto-sync lyrics to vocals using Demucs + Whisper")
     parser.add_argument("--artist", required=True)
     parser.add_argument("--title", required=True)
+    parser.add_argument("--clear-cache", action="store_true", help="Force re-run Demucs & Whisper even if outputs exist")
     args = parser.parse_args()
 
     artist_slug = re.sub(r"[^A-Za-z0-9_]+", "_", args.artist.strip())
@@ -141,12 +158,13 @@ def main():
     print(f"\n🎤 Processing: {args.artist} — {args.title}")
     print(f"   Lyrics: {lyrics_path}")
     print(f"   Audio : {song_path}")
+    print(f"   Cache : {'CLEAR' if args.clear_cache else 'use existing where possible'}")
 
     # 1. Demucs
-    vocals_path = separate_vocals(str(song_path))
+    vocals_path = separate_vocals(str(song_path), clear_cache=args.clear_cache)
 
     # 2. Whisper
-    json_out = transcribe_with_whisper(vocals_path, Path("lyrics"))
+    json_out = transcribe_with_whisper(vocals_path, Path("lyrics"), clear_cache=args.clear_cache)
 
     # 3. Alignment stub
     align_lyrics_to_audio(lyrics_path, json_out, csv_out)
