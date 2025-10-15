@@ -1,5 +1,5 @@
 # 🎤 Karaoke Time  
-*A lyric video generator by Miguel Cázares*
+*A lyric video generator by Miguel Cazares*
 
 Karaoke Time is a Python + AppleScript toolkit that creates karaoke-style lyric videos with synchronized subtitles, smooth fade-outs, and optional instrumental separation.  
 It’s designed for musicians, performers, and hobbyists who want to quickly generate professional-quality lyric videos from a simple CSV or plain text file.
@@ -111,7 +111,7 @@ yt-dlp
 ---
 
 ## 🧑‍💻 Author
-**Miguel Cázares**  
-[http://miguelengineer.com](http://miguelengineer.com)
+**Miguel Cazares**  
+[https://miguelengineer.com](https://miguelengineer.com)
 
 ---
