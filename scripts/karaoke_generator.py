@@ -6,8 +6,8 @@ karaoke_generator.py — unified entrypoint for Karaoke Time
 Stable build + 🧠 Hybrid transcript/whisper flow:
  - ✅ Uses YouTube transcript (if available) instead of Whisper
  - ✅ Falls back to Whisper + lyric correction when no transcript
- - ✅ Supports --youtube-id (bypasses auto-fetch if known)
- - ✅ Retains --max-seconds trimming for fast iteration
+ - ✅ Auto-extracts YouTube ID from URL if not provided
+ - ✅ Supports --max-seconds trimming for fast iteration
 """
 
 import argparse, os, sys, subprocess, shlex, re
@@ -56,6 +56,21 @@ def run(cmd, debug: bool = True):
 def sanitize_name(name: str) -> str:
     return re.sub(r"[^A-Za-z0-9_]+", "_", name.strip().replace(" ", "_"))
 
+def extract_youtube_id(url: str) -> str:
+    """Extracts the video ID from any YouTube URL format."""
+    if not url:
+        return None
+    # Support full, short, and embed links
+    patterns = [
+        r"(?:v=|\/v\/|youtu\.be\/|\/embed\/)([A-Za-z0-9_-]{11})",
+        r"^([A-Za-z0-9_-]{11})$"
+    ]
+    for pattern in patterns:
+        match = re.search(pattern, url)
+        if match:
+            return match.group(1)
+    return None
+
 def fetch_youtube_url(api_key: str, artist: str, title: str) -> str:
     try:
         result = subprocess.run(
@@ -97,7 +112,7 @@ def main():
     parser.add_argument("--artist", required=True)
     parser.add_argument("--title", required=True)
     parser.add_argument("--mp3", help="Optional local MP3 path")
-    parser.add_argument("--youtube-id", help="Explicit YouTube ID (skips fetch)")
+    parser.add_argument("--youtube-id", help="Explicit YouTube ID (skips extraction)")
     parser.add_argument("--youtube-url", help="Optional YouTube URL to skip auto-fetch")
     parser.add_argument("--youtube-api-key", help="YouTube Data API key (or env $YT_KEY)")
     parser.add_argument("--genius-token", help="Genius API token (or env $GENIUS_TOKEN)")
@@ -134,11 +149,19 @@ def main():
     if not youtube_url:
         print("🔎 Fetching YouTube URL automatically…")
         youtube_url = fetch_youtube_url(args.youtube_api_key, args.artist, args.title)
+
     if youtube_url:
         print(f"🎥 Using YouTube: {youtube_url}")
     else:
         print("❌ Could not resolve YouTube video.")
         sys.exit(1)
+
+    # --- Extract or confirm YouTube ID ---
+    youtube_id = args.youtube_id or extract_youtube_id(youtube_url)
+    if not youtube_id:
+        print("❌ Could not extract YouTube video ID.")
+        sys.exit(1)
+    print(f"🧩 Using YouTube ID: {youtube_id}")
 
     # --- Download or reuse audio ---
     if not mp3_out.exists():
@@ -152,15 +175,14 @@ def main():
     # --- Try transcript first ---
     csv_transcript = Path("lyrics") / f"{artist_slug}_{title_slug}_transcript.csv"
     transcript_ok = False
-    if args.youtube_id:
-        try:
-            run(f'python3 scripts/fetch_transcript.py --youtube-id "{args.youtube_id}" '
-                f'--artist "{args.artist}" --title "{args.title}" --out "{csv_transcript}"')
-            if csv_transcript.exists() and csv_transcript.stat().st_size > 50:
-                transcript_ok = True
-                print("✅ Using YouTube transcript (skipping Whisper).")
-        except subprocess.CalledProcessError:
-            print("⚠️ Transcript unavailable — falling back to Whisper.")
+    try:
+        run(f'python3 scripts/fetch_transcript.py --youtube-id "{youtube_id}" '
+            f'--artist "{args.artist}" --title "{args.title}" --out "{csv_transcript}"')
+        if csv_transcript.exists() and csv_transcript.stat().st_size > 50:
+            transcript_ok = True
+            print("✅ Using YouTube transcript (skipping Whisper).")
+    except subprocess.CalledProcessError:
+        print("⚠️ Transcript unavailable — falling back to Whisper.")
 
     # --- Fallback: Whisper + lyric correction ---
     if not transcript_ok:
