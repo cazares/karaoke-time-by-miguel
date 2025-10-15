@@ -2,10 +2,12 @@
 # -*- coding: utf-8 -*-
 """
 karaoke_generator.py — unified entrypoint for Karaoke Time
-Stable build + ✅ new --max-seconds flag:
- - Trims MP3 to first N seconds before full processing chain
- - Applies to all steps (Demucs, Whisper, render)
- - Reuses cached full MP3 if flag not set
+
+Stable build + 🧠 Hybrid transcript/whisper flow:
+ - ✅ Uses YouTube transcript (if available) instead of Whisper
+ - ✅ Falls back to Whisper + lyric correction when no transcript
+ - ✅ Supports --youtube-id (bypasses auto-fetch if known)
+ - ✅ Retains --max-seconds trimming for fast iteration
 """
 
 import argparse, os, sys, subprocess, shlex, re
@@ -85,11 +87,7 @@ def maybe_trim_audio(mp3_path: Path, max_seconds: float) -> Path:
         print(f"🌀 Using cached preview audio: {trimmed}")
         return trimmed
     print(f"✂️  Trimming to first {max_seconds:.1f}s for quick debug…")
-    cmd = [
-        "ffmpeg", "-y", "-i", str(mp3_path),
-        "-t", str(max_seconds),
-        "-c", "copy", str(trimmed)
-    ]
+    cmd = ["ffmpeg", "-y", "-i", str(mp3_path), "-t", str(max_seconds), "-c", "copy", str(trimmed)]
     subprocess.run(cmd, check=True)
     return trimmed
 
@@ -99,6 +97,7 @@ def main():
     parser.add_argument("--artist", required=True)
     parser.add_argument("--title", required=True)
     parser.add_argument("--mp3", help="Optional local MP3 path")
+    parser.add_argument("--youtube-id", help="Explicit YouTube ID (skips fetch)")
     parser.add_argument("--youtube-url", help="Optional YouTube URL to skip auto-fetch")
     parser.add_argument("--youtube-api-key", help="YouTube Data API key (or env $YT_KEY)")
     parser.add_argument("--genius-token", help="Genius API token (or env $GENIUS_TOKEN)")
@@ -127,76 +126,78 @@ def main():
     title_slug = sanitize_name(args.title)
     mp3_out = Path("songs") / f"{artist_slug}_{title_slug}.mp3"
     lyrics_path = Path("lyrics") / f"{artist_slug}_{title_slug}.txt"
-    csv_path = Path("lyrics") / f"{artist_slug}_{title_slug}_synced.csv"
 
-    print("🔎 Fetching YouTube URL automatically…")
-    youtube_url = args.youtube_url or fetch_youtube_url(args.youtube_api_key, args.artist, args.title)
-
+    # --- YouTube URL or ID ---
+    youtube_url = args.youtube_url
+    if not youtube_url and args.youtube_id:
+        youtube_url = f"https://www.youtube.com/watch?v={args.youtube_id}"
+    if not youtube_url:
+        print("🔎 Fetching YouTube URL automatically…")
+        youtube_url = fetch_youtube_url(args.youtube_api_key, args.artist, args.title)
     if youtube_url:
-        print(f"🎥 Found URL: {youtube_url}")
-    elif mp3_out.exists():
-        print(f"⚠️  Could not fetch new YouTube URL — using cached MP3: {mp3_out}")
+        print(f"🎥 Using YouTube: {youtube_url}")
     else:
-        print("❌ No YouTube URL found and no cached MP3 available. Aborting.")
+        print("❌ Could not resolve YouTube video.")
         sys.exit(1)
 
-    if not mp3_out.exists() and youtube_url:
+    # --- Download or reuse audio ---
+    if not mp3_out.exists():
         run(f'yt-dlp -x --audio-format mp3 -o "{mp3_out}" "{youtube_url}"')
     else:
         print(f"🌀 Cached MP3: {mp3_out}")
 
-    # 🧩 Trim audio early if max-seconds requested
+    # --- Trim for debug ---
     mp3_used = maybe_trim_audio(mp3_out, args.max_seconds)
 
-    if not lyrics_path.exists() or args.clear_cache:
-        run([
-            "python3", "scripts/fetch_lyrics.py",
-            "--title", args.title,
-            "--artist", args.artist,
-            "--output", str(lyrics_path),
-            "--genius-token", args.genius_token,
-        ])
-    else:
-        print(f"🌀 Cached lyrics: {lyrics_path}")
+    # --- Try transcript first ---
+    csv_transcript = Path("lyrics") / f"{artist_slug}_{title_slug}_transcript.csv"
+    transcript_ok = False
+    if args.youtube_id:
+        try:
+            run(f'python3 scripts/fetch_transcript.py --youtube-id "{args.youtube_id}" '
+                f'--artist "{args.artist}" --title "{args.title}" --out "{csv_transcript}"')
+            if csv_transcript.exists() and csv_transcript.stat().st_size > 50:
+                transcript_ok = True
+                print("✅ Using YouTube transcript (skipping Whisper).")
+        except subprocess.CalledProcessError:
+            print("⚠️ Transcript unavailable — falling back to Whisper.")
 
-    cmd = [
-        "python3", "-u", "scripts/karaoke_auto_sync_lyrics.py",
-        "--artist", args.artist,
-        "--title", args.title,
-    ]
-    if args.clear_cache:
-        cmd.append("--clear-cache")
-    if args.final:
-        cmd.append("--final")
-    if args.vocals_percent > 0:
-        cmd += ["--vocals-percent", str(args.vocals_percent)]
+    # --- Fallback: Whisper + lyric correction ---
+    if not transcript_ok:
+        cmd = [
+            "python3", "-u", "scripts/karaoke_auto_sync_lyrics.py",
+            "--artist", args.artist, "--title", args.title,
+        ]
+        if args.clear_cache:
+            cmd.append("--clear-cache")
+        if args.final:
+            cmd.append("--final")
+        if args.vocals_percent > 0:
+            cmd += ["--vocals-percent", str(args.vocals_percent)]
+        run(cmd)
 
-    run(cmd)
-
-    if args.run_all:
         run(
             f'python3 scripts/override_lyrics_with_genius.py '
             f'--whisper "lyrics/{artist_slug}_{title_slug}_synced.csv" '
             f'--genius "lyrics/{artist_slug}_{title_slug}.txt" '
             f'--out "lyrics/{artist_slug}_{title_slug}_synced_genius.csv"'
         )
+        csv_transcript = Path(f"lyrics/{artist_slug}_{title_slug}_synced_genius.csv")
 
-        # ✅ minimal additive update: added artist/title/font-size passing + max-seconds forward
-        cmd_render = (
+    # --- Render ---
+    if args.run_all:
+        run(
             f'python3 scripts/karaoke_time.py '
-            f'--csv "lyrics/{artist_slug}_{title_slug}_synced_genius.csv" '
+            f'--csv "{csv_transcript}" '
             f'--mp3 "{mp3_used}" '
             f'--artist "{args.artist}" '
             f'--title "{args.title}" '
             f'--offset {args.offset} '
             f'--font-size {args.font_size}'
         )
-        run(cmd_render)
 
     print("\n✅ Karaoke generation complete!")
 
 if __name__ == "__main__":
     warn_if_hardcoded_keys(__file__)
     main()
-
-# end of karaoke_generator.py

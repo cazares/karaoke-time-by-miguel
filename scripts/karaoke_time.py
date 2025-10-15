@@ -8,6 +8,8 @@ Minimal, surgical fixes:
  - Centered text (Alignment=5), WrapStyle=2
  - Reliable time conversion; end = next_start - 0.10s
  - ✅ Apply --offset to all lyric timestamps and title card
+ - ✅ NEW: Optional --max-seconds for debug preview
+ - ✅ NEW: Optional --debug-lyrics to preview loaded text before render
 """
 
 import argparse, csv, re, subprocess, sys, tempfile
@@ -24,9 +26,6 @@ def ass_time_from_seconds(sec: float) -> str:
 
 
 def parse_timestamp(ts: str) -> float:
-    """
-    Accepts 'H:MM:SS.xx' or raw seconds '123.45'.
-    """
     ts = ts.strip()
     if re.match(r"^\d+(\.\d+)?$", ts):
         return float(ts)
@@ -46,13 +45,8 @@ def parse_timestamp(ts: str) -> float:
 
 
 def read_rows(csv_path: Path):
-    """
-    Reads CSV lines robustly — works with or without headers.
-    Auto-detects if the first row is non-numeric and skips it.
-    """
     rows = []
     with open(csv_path, newline="", encoding="utf-8") as f:
-        # peek first line to decide if it’s header or numeric
         sample = f.readline()
         f.seek(0)
         first_cell = sample.split(",")[0].strip().strip('"')
@@ -78,10 +72,14 @@ def read_rows(csv_path: Path):
     return rows
 
 
-def build_ass(rows, artist: str, title: str, font_size: int, offset: float) -> str:
-    # Apply offset to all timestamps
+def build_ass(rows, artist: str, title: str, font_size: int, offset: float, max_seconds: float) -> str:
+    # Apply offset
     for r in rows:
         r["t"] = r["t"] + offset
+
+    # Clip for debugging
+    if max_seconds > 0:
+        rows = [r for r in rows if r["t"] <= max_seconds]
 
     first_start = rows[0]["t"] if rows else 0.0
     if first_start < 2.0 and rows:
@@ -119,6 +117,8 @@ def build_ass(rows, artist: str, title: str, font_size: int, offset: float) -> s
             end = max(start + 0.10, next_start - 0.10)
         else:
             end = start + 3.0
+        if max_seconds > 0 and start > max_seconds:
+            break
         events.append((ass_time_from_seconds(start), ass_time_from_seconds(end), r["text"].replace("\r", "").replace("\n", "\\N")))
 
     body_lines = [f"Dialogue: 0,{st},{et},Default,,0,0,0,,{txt}" for (st, et, txt) in events]
@@ -133,20 +133,29 @@ def main():
     ap.add_argument("--title", required=True)
     ap.add_argument("--offset", type=float, default=0.0)
     ap.add_argument("--font-size", type=int, default=140)
+    ap.add_argument("--max-seconds", type=float, default=0.0)
+    ap.add_argument("--debug-lyrics", action="store_true")
     args = ap.parse_args()
 
     csv_path = Path(args.csv)
     mp3_path = Path(args.mp3)
     out_dir = Path("output")
     out_dir.mkdir(exist_ok=True)
-    out_path = out_dir / f"{mp3_path.stem}_karaoke.mp4"
+    suffix = "_preview" if args.max_seconds > 0 else ""
+    out_path = out_dir / f"{mp3_path.stem}{suffix}_karaoke.mp4"
 
     rows = read_rows(csv_path)
     if not rows:
         print("❌ No lyric rows found after reading CSV.")
         sys.exit(1)
 
-    ass_txt = build_ass(rows, args.artist, args.title, args.font_size, args.offset)
+    if args.debug_lyrics:
+        print(f"\n🩵 DEBUG LYRICS (first 10 from {csv_path.name}):")
+        for r in rows[:10]:
+            print(f"  {r['t']:>7.2f}s | {r['text']}")
+        print("...")
+
+    ass_txt = build_ass(rows, args.artist, args.title, args.font_size, args.offset, args.max_seconds)
 
     with tempfile.NamedTemporaryFile(delete=False, suffix=".ass", mode="w", encoding="utf-8") as tf:
         tf.write(ass_txt)
@@ -156,7 +165,7 @@ def main():
         "ffmpeg", "-y",
         "-f", "lavfi", "-i", "color=c=black:size=1280x720",
         "-i", str(mp3_path),
-        "-vf", f"subtitles={ass_path}:force_style='WrapStyle=2'",
+        "-vf", f"subtitles={ass_path}:force_style='WrapStyle=2,Alignment=5,FontSize={args.font_size}'",
         "-shortest",
         "-c:v", "libx264", "-preset", "medium", "-crf", "20",
         "-c:a", "aac", "-b:a", "192k",
