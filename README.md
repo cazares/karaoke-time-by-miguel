@@ -112,6 +112,6 @@ yt-dlp
 
 ## 🧑‍💻 Author
 **Miguel Cazares**  
-[httsp://miguelengineer.com](https://miguelengineer.com)
+[https://miguelengineer.com](https://miguelengineer.com)
 
 ---
