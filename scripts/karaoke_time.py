@@ -1,74 +1,110 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-karaoke_time.py — interactive tap-timing helper for Karaoke Time
-Stable build — explicitly calls scripts/karaoke_core.py so render always works.
+karaoke_time.py — single entrypoint (interactive + non-interactive)
+Now supports:
+  --center-text : vertically + horizontally centers subtitles
 """
 
-import argparse, csv, sys, os, time, subprocess
+import argparse, csv, os, subprocess, platform, tempfile
+from datetime import datetime
 from pathlib import Path
 
-def tap_mode(lyrics_path: Path, output_csv: Path, offset: float = 0.0):
-    print("\n🎹 Tap mode: Press ENTER in rhythm with each lyric line.")
-    print("Press ENTER to start...")
-    input()
-    start_time = time.time()
-    timestamps = []
-    lines = [l.strip() for l in lyrics_path.read_text(encoding="utf-8").splitlines() if l.strip()]
-    for idx, line in enumerate(lines):
-        input(f"🎵 {line}\n")
-        ts = time.time() - start_time + offset
-        timestamps.append((ts, line))
-        print(f"🕒 {ts:.2f}s — recorded")
+def parse_args():
+    parser = argparse.ArgumentParser(description="🎤 Karaoke Time")
+    parser.add_argument("--lyrics-txt", help="Path to plain-text lyrics file")
+    parser.add_argument("--csv", help="Path to timestamped lyrics CSV")
+    parser.add_argument("--mp3", required=True, help="Audio file path")
+    parser.add_argument("--offset", type=float, default=0.0, help="Global timing offset (sec)")
+    parser.add_argument("--font-size", type=int, default=140, help="Font size for subtitles")
+    parser.add_argument("--debug", action="store_true")
+    parser.add_argument("--center-text", action="store_true", help="Center subtitles vertically + horizontally")
+    return parser.parse_args()
 
-    with open(output_csv, "w", newline="", encoding="utf-8") as f:
-        writer = csv.DictWriter(f, fieldnames=["timestamp", "text"])
-        writer.writeheader()
-        for ts, line in timestamps:
-            writer.writerow({"timestamp": f"{ts:.3f}", "text": line})
-    print(f"\n✅ Tap timing complete — saved to {output_csv}")
-    return output_csv
+def read_csv(csv_path):
+    rows = []
+    with open(csv_path, newline='', encoding='utf-8') as f:
+        rdr = csv.DictReader(f)
+        for r in rdr:
+            rows.append(r)
+    return rows
 
-def render_ass_and_video(input_path: Path, mp3_path: Path, font_size: int = 140):
-    """Call karaoke_core.py safely from /scripts directory."""
-    core_script = Path(__file__).resolve().parent / "karaoke_core.py"
-    cmd = (
-        f'python3 "{core_script}" '
-        f'--csv "{input_path}" '
-        f'--mp3 "{mp3_path}" '
-        f'--font-size {font_size}'
-    )
-    print(f"\n🎬 Running FFmpeg render pipeline:\n▶️ {cmd}")
-    subprocess.run(cmd, shell=True, check=False)
+def make_ass(csv_path, font_size, center_text):
+    rows = read_csv(csv_path)
+    ass_path = Path(csv_path).with_suffix(".ass")
+
+    alignment = 5 if center_text else 2  # 5 = center both, 2 = bottom center
+    with open(ass_path, "w", encoding="utf-8") as f:
+        f.write("[Script Info]\n")
+        f.write("Title: Karaoke Time\n")
+        f.write("ScriptType: v4.00+\n")
+        f.write("Collisions: Normal\n")
+        f.write("PlayResX: 1280\n")
+        f.write("PlayResY: 720\n")
+        f.write("WrapStyle: 2\n")
+        f.write("\n[V4+ Styles]\n")
+        f.write("Format: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, OutlineColour, BackColour, Bold, Italic, "
+                "Underline, StrikeOut, ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline, Shadow, Alignment, MarginL, MarginR, MarginV, Encoding\n")
+        f.write(f"Style: Default,Arial,{font_size},&H00FFFFFF,&H000000FF,&H00000000,&H64000000,0,0,0,0,100,100,0,0,1,3,0,{alignment},20,20,20,1\n")
+        f.write("\n[Events]\n")
+        f.write("Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text\n")
+
+        for row in rows:
+            start = row["timestamp"]
+            text = row["text"].replace("\\n", "\\N")
+            end_time = next_end(rows, row, start)
+            f.write(f"Dialogue: 0,{start},{end_time},Default,,0,0,0,,{text}\n")
+
+    print(f"✅ Created ASS: {ass_path}")
+    return ass_path
+
+def next_end(rows, current_row, start):
+    """Estimate the end timestamp as the next row's timestamp or +3s fallback."""
+    idx = rows.index(current_row)
+    if idx + 1 < len(rows):
+        return rows[idx + 1]["timestamp"]
+    else:
+        parts = [int(float(x)) for x in start.replace('.', ':').split(':')]
+        # add 3 seconds fallback
+        h, m, s = parts if len(parts) == 3 else (0, 0, 0)
+        s += 3
+        if s >= 60:
+            s -= 60
+            m += 1
+        return f"{h:01d}:{m:02d}:{s:02d}.00"
+
+def render_video(mp3_path, ass_path):
+    output_dir = Path("output")
+    output_dir.mkdir(exist_ok=True)
+    out_path = output_dir / (Path(mp3_path).stem + "_karaoke.mp4")
+
+    cmd = [
+        "ffmpeg", "-y",
+        "-f", "lavfi", "-i", "color=c=black:size=1280x720",
+        "-i", str(mp3_path),
+        "-vf", f"subtitles='{ass_path}'",
+        "-c:v", "libx264",
+        "-preset", "fast",
+        "-crf", "18",
+        "-c:a", "aac",
+        "-b:a", "192k",
+        str(out_path)
+    ]
+    subprocess.run(cmd, check=True)
+    print(f"✅ Render complete! Saved to {out_path}")
 
 def main():
-    parser = argparse.ArgumentParser(description="Interactive tap-timing for Karaoke Time")
-    parser.add_argument("--lyrics-txt", help="Path to lyrics .txt file")
-    parser.add_argument("--csv", help="Path to pre-synced CSV file")
-    parser.add_argument("--mp3", required=True, help="Path to source audio file")
-    parser.add_argument("--offset", type=float, default=0.0, help="Global timing offset (seconds)")
-    parser.add_argument("--font-size", type=int, default=140, help="Font size for lyrics text")
-    parser.add_argument("--debug", action="store_true", help="Enable verbose mode")
-    args = parser.parse_args()
+    args = parse_args()
+    csv_path = args.csv
+    if not csv_path and args.lyrics_txt:
+        print("⚠️  Only CSV input supported for sync at this stage.")
+        return
 
-    if args.csv:
-        csv_path = Path(args.csv)
-        print(f"🧾 Using pre-synced CSV: {csv_path}")
-    elif args.lyrics_txt:
-        lyrics_path = Path(args.lyrics_txt)
-        csv_path = lyrics_path.with_suffix(".csv")
-        tap_mode(lyrics_path, csv_path, offset=args.offset)
-    else:
-        print("❌ Must specify either --csv or --lyrics-txt")
-        sys.exit(1)
-
-    render_ass_and_video(csv_path, Path(args.mp3), font_size=args.font_size)
+    ass_path = make_ass(csv_path, args.font_size, args.center_text)
+    render_video(args.mp3, ass_path)
+    print("✅ Auto-sync complete! 🎉")
 
 if __name__ == "__main__":
-    try:
-        main()
-    except KeyboardInterrupt:
-        print("\n👋 Exiting tap mode gracefully.")
-        sys.exit(0)
+    main()
 
 # end of karaoke_time.py

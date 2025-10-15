@@ -2,7 +2,10 @@
 # -*- coding: utf-8 -*-
 """
 karaoke_generator.py — unified entrypoint for Karaoke Time
-Stable build: uses cached stems, no autoplay, no refactor.
+Now:
+- Passes --font-size to karaoke_time.py
+- Automatically overrides Whisper CSV with Genius lyrics
+- Centers text horizontally and vertically in output video
 """
 
 import argparse, os, sys, subprocess, shlex, re
@@ -87,6 +90,7 @@ def main():
     parser.add_argument("--final", action="store_true", help="Full-quality mode (slower)")
     parser.add_argument("--clear-cache", action="store_true", help="Force rerun of Demucs/Whisper cache")
     parser.add_argument("--run-all", action="store_true", help="Run full chain through MP4 render")
+    parser.add_argument("--font-size", type=int, default=140, help="Font size for subtitles")
     args = parser.parse_args()
 
     args.youtube_api_key = args.youtube_api_key or os.getenv("YT_KEY")
@@ -105,7 +109,7 @@ def main():
     mp3_out = Path("songs") / f"{artist_slug}_{title_slug}.mp3"
     lyrics_path = Path("lyrics") / f"{artist_slug}_{title_slug}.txt"
     csv_path = Path("lyrics") / f"{artist_slug}_{title_slug}_synced.csv"
-    genius_csv_out = Path("lyrics") / f"{artist_slug}_{title_slug}_synced_genius.csv"
+    csv_override = Path("lyrics") / f"{artist_slug}_{title_slug}_synced_genius.csv"
 
     print("🔎 Fetching YouTube URL automatically…")
     youtube_url = args.youtube_url or fetch_youtube_url(args.youtube_api_key, args.artist, args.title)
@@ -148,27 +152,28 @@ def main():
 
     run(cmd)
 
-    # 🎙️ NEW: override Whisper text with Genius lyrics, keep timings
-    try:
-        if csv_path.exists() and lyrics_path.exists():
-            print("🎙️ Overriding Whisper text with Genius lyrics (keeping timings)…")
-            run(
-                f'python3 scripts/override_lyrics_with_genius.py '
-                f'--whisper "{csv_path}" '
-                f'--genius "{lyrics_path}" '
-                f'--out "{genius_csv_out}" '
-                f'--min-similarity 0.35'
-            )
-            final_csv = genius_csv_out
-        else:
-            print("⚠️ Missing Whisper CSV or Genius TXT — skipping override.")
-            final_csv = csv_path
-    except Exception as e:
-        print(f"⚠️ Genius override skipped due to error: {e}")
-        final_csv = csv_path
+    # ✅ NEW: Automatically override Whisper CSV with Genius lyrics
+    if csv_path.exists() and lyrics_path.exists():
+        run([
+            "python3", "scripts/override_lyrics_with_genius.py",
+            "--whisper", str(csv_path),
+            "--genius", str(lyrics_path),
+            "--out", str(csv_override)
+        ])
+    else:
+        print("⚠️ Missing Whisper CSV or Genius TXT; skipping lyric override.")
 
+    # ✅ NEW: Pass font-size and use vertically centered alignment
     if args.run_all:
-        run(f'python3 scripts/karaoke_time.py --csv "{final_csv}" --mp3 "{mp3_out}" --offset {args.offset}')
+        font_size_arg = getattr(args, "font_size", 140)
+        run(
+            f'python3 scripts/karaoke_time.py '
+            f'--csv "{csv_override if csv_override.exists() else csv_path}" '
+            f'--mp3 "{mp3_out}" '
+            f'--offset {args.offset} '
+            f'--font-size {font_size_arg} '
+            f'--center-text'
+        )
 
     print("\n✅ Karaoke generation complete!")
 

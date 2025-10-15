@@ -2,16 +2,18 @@
 # -*- coding: utf-8 -*-
 """
 karaoke_core.py — shared logic for Karaoke Time
-This version ensures both interactive (tap-to-time) and CSV playback sustain each lyric
-until just before the next block starts.
-Now includes: live FFmpeg progress, vertical centering, 20pt smaller font, and smart wrapping.
+Now filters out Genius metadata (Contributors, Produced by, Embed, etc.)
+and honors --font-size exactly (no hidden reductions).
 """
 
-import csv, os, platform, subprocess, sys, tempfile, time
+import csv, os, platform, subprocess, sys, tempfile, time, re
 from datetime import datetime
-from typing import List, Tuple, Optional
+from typing import List, Tuple
 from pathlib import Path
 
+# --------------------------------------------------------------------
+# CSV loading & lyric cleaning
+# --------------------------------------------------------------------
 def read_csv_timing(csv_path: str) -> List[Tuple[float, str]]:
     rows = []
     with open(csv_path, newline='', encoding='utf-8') as f:
@@ -20,9 +22,32 @@ def read_csv_timing(csv_path: str) -> List[Tuple[float, str]]:
             ts = float(r["timestamp"])
             txt = r["text"].strip()
             if txt:
-                rows.append((ts, txt))
-    return rows
+                rows.append((ts, clean_lyric_line(txt)))
+    return [r for r in rows if r[1]]  # remove any now-empty lines
 
+
+def clean_lyric_line(text: str) -> str:
+    """
+    Remove Genius metadata, credits, and non-lyric noise.
+    """
+    bad_patterns = [
+        r"(?i)\bContributors\b",
+        r"(?i)\bProduced by\b",
+        r"(?i)\bEmbed\b",
+        r"(?i)\bLyrics\b",
+        r"(?i)\bYou might also like\b",
+        r"(?i)\bTranslations\b",
+        r"(?i)^[\d]+\s*$"
+    ]
+    for pat in bad_patterns:
+        if re.search(pat, text):
+            return ""
+    return text
+
+
+# --------------------------------------------------------------------
+# ASS generation
+# --------------------------------------------------------------------
 def generate_ass(timed_lines: List[Tuple[float, str]], ass_path: str, font_size: int = 140):
     header = f"""[Script Info]
 ScriptType: v4.00+
@@ -33,7 +58,7 @@ Timer: 100.0000
 
 [V4+ Styles]
 Format: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, OutlineColour, BackColour, Bold, Italic, Underline, StrikeOut, ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline, Shadow, Alignment, MarginL, MarginR, MarginV, Encoding
-Style: Default,Open Sans,{font_size},&H00FFFFFF,&H000000FF,&H00000000,&H64000000,0,0,0,0,100,100,0,0,1,3,0,2,40,40,40,1
+Style: Default,Open Sans,{font_size},&H00FFFFFF,&H000000FF,&H00000000,&H64000000,0,0,0,0,100,100,0,0,1,3,0,5,40,40,40,1
 
 [Events]
 Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
@@ -43,8 +68,9 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
         for i, (ts, text) in enumerate(timed_lines):
             start = time_to_ass(ts)
             end = time_to_ass(timed_lines[i + 1][0] - 0.1 if i + 1 < len(timed_lines) else ts + 3.0)
-            line = f"Dialogue: 0,{start},{end},Default,,0,0,0,,{text}\n"
-            f.write(line)
+            text = text.replace("\n", "\\N")
+            f.write(f"Dialogue: 0,{start},{end},Default,,0,0,0,,{text}\n")
+
 
 def time_to_ass(seconds: float) -> str:
     h = int(seconds // 3600)
@@ -52,36 +78,35 @@ def time_to_ass(seconds: float) -> str:
     s = seconds % 60
     return f"{h:d}:{m:02d}:{s:05.2f}"
 
+
+# --------------------------------------------------------------------
+# FFmpeg rendering
+# --------------------------------------------------------------------
 def render_video(csv_path: str, mp3_path: str, output_path: str, font_size: int = 140):
     print("\n🎬 Rendering final karaoke video...")
 
     timed_lines = read_csv_timing(csv_path)
+    if not timed_lines:
+        raise ValueError("No valid lyric lines found after filtering.")
 
     ass_path = tempfile.mktemp(suffix=".ass")
     generate_ass(timed_lines, ass_path, font_size)
 
-    # ↓ Adjustments: smaller font, centered vertically, and smart wrapping
-    font_size = font_size - 20
-    ass_alignment = 5  # middle-center
     ffmpeg_cmd = (
         f'ffmpeg -y '
         f'-f lavfi -i "color=c=black:size=1280x720" '
         f'-i "{mp3_path}" '
         f'-vf "subtitles={ass_path}:force_style='
-        f"\'FontSize={font_size},Alignment={ass_alignment},WrapStyle=2,MarginV=60\'\" "
+        f"\'FontSize={font_size},Alignment=5,WrapStyle=2,MarginV=60\'\" "
         f'-c:v libx264 -preset medium -crf 20 '
         f'-c:a aac -b:a 192k -shortest '
         f'"{output_path}"'
     )
 
-    # 🎥 Demucs-style live output
     process = subprocess.Popen(
-        ffmpeg_cmd,
-        shell=True,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.STDOUT,
-        text=True,
-        bufsize=1
+        ffmpeg_cmd, shell=True,
+        stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+        text=True, bufsize=1
     )
 
     for line in process.stdout:
@@ -94,6 +119,10 @@ def render_video(csv_path: str, mp3_path: str, output_path: str, font_size: int 
 
     print(f"\n✅ Render complete! Saved to {output_path}\n")
 
+
+# --------------------------------------------------------------------
+# CLI entry
+# --------------------------------------------------------------------
 def main():
     import argparse
     parser = argparse.ArgumentParser(description="Render karaoke video from CSV + MP3")
@@ -103,14 +132,10 @@ def main():
     parser.add_argument("--offset", type=float, default=0.0)
     args = parser.parse_args()
 
-    csv_path = args.csv
-    mp3_path = args.mp3
-    font_size = args.font_size
-
-    output_name = f"{Path(mp3_path).stem}_karaoke.mp4"
+    output_name = f"{Path(mp3_path:=args.mp3).stem}_karaoke.mp4"
     output_path = Path("output") / output_name
+    render_video(args.csv, mp3_path, str(output_path), args.font_size)
 
-    render_video(csv_path, mp3_path, str(output_path), font_size)
 
 if __name__ == "__main__":
     main()
