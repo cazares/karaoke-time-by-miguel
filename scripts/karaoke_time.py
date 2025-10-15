@@ -7,6 +7,7 @@ Minimal, surgical fixes:
  - Title card (compact if first <2s; spacious otherwise)
  - Centered text (Alignment=5), WrapStyle=2
  - Reliable time conversion; end = next_start - 0.10s
+ - ✅ Apply --offset to all lyric timestamps and title card
 """
 
 import argparse, csv, re, subprocess, sys, tempfile
@@ -77,7 +78,11 @@ def read_rows(csv_path: Path):
     return rows
 
 
-def build_ass(rows, artist: str, title: str, font_size: int) -> str:
+def build_ass(rows, artist: str, title: str, font_size: int, offset: float) -> str:
+    # Apply offset to all timestamps
+    for r in rows:
+        r["t"] = r["t"] + offset
+
     first_start = rows[0]["t"] if rows else 0.0
     if first_start < 2.0 and rows:
         title_text = f"{title}\\Nby\\N{artist}\\N\\N{rows[0]['text']}"
@@ -101,8 +106,8 @@ def build_ass(rows, artist: str, title: str, font_size: int) -> str:
     )
 
     events = []
-    tc_start = 0.0
-    tc_end = max(2.5, first_start)
+    tc_start = 0.0 + offset
+    tc_end = max(2.5 + offset, first_start)
     events.append((ass_time_from_seconds(tc_start), ass_time_from_seconds(tc_end - 0.05), title_text))
 
     for i, r in enumerate(rows):
@@ -141,7 +146,7 @@ def main():
         print("❌ No lyric rows found after reading CSV.")
         sys.exit(1)
 
-    ass_txt = build_ass(rows, args.artist, args.title, args.font_size)
+    ass_txt = build_ass(rows, args.artist, args.title, args.font_size, args.offset)
 
     with tempfile.NamedTemporaryFile(delete=False, suffix=".ass", mode="w", encoding="utf-8") as tf:
         tf.write(ass_txt)
