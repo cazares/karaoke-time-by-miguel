@@ -1,50 +1,70 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-karaoke_time.py — render MP4 from CSV + MP3 + ASS
-Fully verbose, unchanged behavior (just relative path safety).
+karaoke_time.py — interactive tap-timing helper for Karaoke Time
+Handles ENTER-based timing capture and ASS/MP4 generation.
 """
 
-import argparse
-import subprocess
-import sys
+import argparse, csv, sys, os, time, subprocess
 from pathlib import Path
 
-def run(cmd):
-    print(f"\n▶️ {cmd}")
-    p = subprocess.Popen(cmd, shell=True, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
-    for line in p.stdout:
-        sys.stdout.write(line)
-        sys.stdout.flush()
-    p.wait()
-    if p.returncode != 0:
-        raise subprocess.CalledProcessError(p.returncode, cmd)
+# 🧭 Always operate from project root
+os.chdir(Path(__file__).resolve().parent.parent)
+
+def tap_mode(lyrics_path: Path, output_csv: Path, offset: float = 0.0):
+    print("\\n🎹 Tap mode: Press ENTER in rhythm with each lyric line.")
+    print("Press ENTER to start...")
+    input()
+
+    start_time = time.time()
+    timestamps = []
+    lines = [l.strip() for l in lyrics_path.read_text(encoding="utf-8").splitlines() if l.strip()]
+
+    for idx, line in enumerate(lines):
+        input(f"🎵 {line}\\n")
+        ts = time.time() - start_time + offset
+        timestamps.append((ts, line))
+        print(f"🕒 {ts:.2f}s — recorded")
+
+    with open(output_csv, "w", newline="", encoding="utf-8") as f:
+        writer = csv.DictWriter(f, fieldnames=["timestamp", "text"])
+        writer.writeheader()
+        for ts, line in timestamps:
+            writer.writerow({"timestamp": f"{ts:.3f}", "text": line})
+
+    print(f"\\n✅ Tap timing complete — saved to {output_csv}")
+    return output_csv
+
+def render_ass_and_video(csv_path: Path, mp3_path: Path, font_size: int = 140):
+    cmd = (
+        f'python3 scripts/karaoke_core.py '
+        f'--csv "{csv_path}" '
+        f'--mp3 "{mp3_path}" '
+        f'--font-size {font_size}'
+    )
+    print(f"\\n🎬 Running FFmpeg render pipeline:\\n▶️ {cmd}")
+    subprocess.run(cmd, shell=True, check=False)
 
 def main():
-    parser = argparse.ArgumentParser(description="🎬 Karaoke Time Renderer")
-    parser.add_argument("--csv", required=True)
+    parser = argparse.ArgumentParser(description="Interactive tap-timing for Karaoke Time")
+    parser.add_argument("--lyrics-txt", required=True)
     parser.add_argument("--mp3", required=True)
     parser.add_argument("--offset", type=float, default=0.0)
-    parser.add_argument("--autoplay", action="store_true")
+    parser.add_argument("--font-size", type=int, default=140)
+    parser.add_argument("--debug", action="store_true")
     args = parser.parse_args()
 
-    csv_path = Path(args.csv)
-    mp3_path = Path(args.mp3)
-    output_dir = Path("output")
-    output_dir.mkdir(exist_ok=True)
+    lyrics_path = Path(args.lyrics_txt)
+    csv_path = lyrics_path.with_suffix(".csv")
 
-    output_path = output_dir / f"{mp3_path.stem}.mp4"
-    ass_path = csv_path.with_suffix(".ass")
-
-    print(f"🎨 Rendering {output_path.name} from {csv_path.name} + {mp3_path.name}")
-    run(f'ffmpeg -y -i "{mp3_path}" -vf "ass={ass_path}" -c:v libx264 -c:a aac -b:a 192k "{output_path}"')
-
-    if args.autoplay:
-        run(f'open -a "QuickTime Player" "{output_path}"')
-
-    print(f"\n✅ Render complete → {output_path}")
+    tap_mode(lyrics_path, csv_path, offset=args.offset)
+    render_ass_and_video(csv_path, Path(args.mp3), font_size=args.font_size)
 
 if __name__ == "__main__":
-    main()
+    try:
+        main()
+    except KeyboardInterrupt:
+        print("\\n👋 Exiting tap mode gracefully.")
+        sys.exit(0)
 
 # end of karaoke_time.py
