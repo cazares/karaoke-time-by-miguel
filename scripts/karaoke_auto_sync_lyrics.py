@@ -1,110 +1,134 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-karaoke_auto_sync_lyrics.py — auto-sync lyrics to audio
-Relative-path safe version: works entirely from current directory.
+karaoke_auto_sync_lyrics.py
+Fully automated lyric sync:
+- Demucs separates stems
+- Whisper transcribes vocals with timestamps
+- Filters out [Music]/[Applause]/noise
+- Converts to timestamped CSV
+- Mixes vocals and renders karaoke video automatically
 """
 
-import argparse, subprocess, sys, re
+import os, sys, subprocess, argparse, json, csv, re
 from pathlib import Path
 
-def run_with_progress(cmd, tag="Process"):
-    print(f"▶️ {tag}: {' '.join(cmd)}")
-    process = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, bufsize=1)
-    for line in process.stdout:
-        sys.stdout.write(line)
-        sys.stdout.flush()
-    process.wait()
+# ---------- utilities ----------
+
+def run_with_progress(cmd, desc=None):
+    display_cmd = " ".join(cmd)
+    if desc:
+        print(f"▶️ {desc}: {display_cmd}")
+    process = subprocess.run(cmd, text=True)
     if process.returncode != 0:
-        raise subprocess.CalledProcessError(process.returncode, cmd)
-    print(f"✅ {tag} complete.\n")
+        raise subprocess.CalledProcessError(process.returncode, display_cmd)
 
-def sanitize_name(name): 
-    return re.sub(r"[^A-Za-z0-9_]+", "_", name.strip().replace(" ", "_"))
+# ---------- helpers ----------
 
-def separate_vocals(song_path, clear_cache=False):
-    """Uses or generates stems relative to ./separated/htdemucs_ft"""
-    cwd = Path.cwd()
-    demucs_root = cwd / "separated" / "htdemucs_ft"
-    target_stem = Path(song_path).stem.lower()
-
-    if demucs_root.exists():
-        for d in demucs_root.glob("*"):
-            if d.is_dir() and d.name.lower() == target_stem:
-                vocals = d / "vocals.wav"
-                if vocals.exists() and not clear_cache:
-                    print(f"🌀 Using cached Demucs output → {vocals}")
-                    return vocals
-
-    print("🎶 Step 1: Separating vocals with Demucs (fresh run)...")
-    run_with_progress(["demucs", str(song_path), "-n", "htdemucs_ft", "-o", "separated"], "Demucs")
-
-    for d in demucs_root.glob("*"):
-        if d.is_dir() and d.name.lower() == target_stem:
-            vocals = d / "vocals.wav"
-            if vocals.exists(): 
-                return vocals
-
-    raise FileNotFoundError(f"❌ Expected vocals track not found for {song_path}")
-
-def transcribe_with_whisper(vocals_path, clear_cache=False):
-    out_json = Path("lyrics") / "vocals.json"
-    if out_json.exists() and not clear_cache:
-        print(f"🌀 Using cached Whisper transcript → {out_json}")
-        return out_json
-    print("🗣️ Step 2: Transcribing vocals with Whisper...")
-    run_with_progress(["whisper", str(vocals_path), "--model", "medium", "--output_dir", "lyrics", "--output_format", "json"], "Whisper")
-    if not out_json.exists():
-        raise FileNotFoundError(f"❌ Whisper output not found: {out_json}")
-    return out_json
-
-def align_lyrics_to_audio(lyrics_path, whisper_json, csv_out):
-    print("🪄 Step 3: Aligning lyrics (stub)...")
-    lines = [l.strip() for l in open(lyrics_path, encoding="utf-8") if l.strip()]
-    with open(csv_out, "w", encoding="utf-8") as f:
-        f.write("timestamp,text\n")  # ✅ Added proper header for karaoke_core.py compatibility
-        for i, line in enumerate(lines):
-            start = i * 5.0
-            f.write(f"{start:.3f},{line}\n")
-    print(f"✅ Lyrics aligned → {csv_out}")
+def find_stems_folder(base_dir, artist, title):
+    song_key = f"{artist.lower().replace(' ','_')}_{title.lower().replace(' ','_')}"
+    candidates = [
+        Path(base_dir) / "separated" / "htdemucs_ft" / song_key,
+        Path(base_dir) / "scripts" / "separated" / "htdemucs_ft" / song_key,
+    ]
+    for c in candidates:
+        if (c / "vocals.wav").exists():
+            return c
+    return candidates[0]
 
 def adjust_vocals_mix(vocals_path, original_path, percent):
-    if percent <= 0:
-        print("🎛️ Skipping vocal mix — instrumental only.")
-        return original_path
-    out_path = Path("songs") / f"{original_path.stem}_mixed_{int(percent)}.mp3"
+    out_path = Path(original_path).with_name(
+        Path(original_path).stem + f"_mixed_{int(percent)}.mp3"
+    )
     print(f"🎚️ Mixing vocals at {percent:.1f}% → {out_path}")
     run_with_progress([
-        "ffmpeg","-y","-i",str(original_path),"-i",str(vocals_path),
-        "-filter_complex",f"[0:a][1:a]amix=inputs=2:weights=1,{percent/100.0}",
-        "-c:a","libmp3lame","-b:a","192k",str(out_path)
-    ],"FFmpeg Mix")
+        "ffmpeg", "-y",
+        "-i", str(original_path),
+        "-i", str(vocals_path),
+        "-filter_complex", f"[0:a][1:a]amix=inputs=2:weights='1 {percent/100.0}'",
+        "-c:a", "libmp3lame", "-b:a", "192k",
+        str(out_path)
+    ], "FFmpeg Mix")
     return out_path
 
+def extract_timestamps_from_whisper(json_path, csv_path):
+    print(f"🪄 Extracting timestamps from {json_path} → {csv_path}")
+    with open(json_path, "r") as f:
+        data = json.load(f)
+
+    filtered_segments = []
+    for seg in data.get("segments", []):
+        text = seg.get("text", "").strip()
+        if not text:
+            continue
+        # Skip non-lyric or noise segments
+        if re.match(r"^\[.*\]$", text):
+            continue
+        if any(kw in text.lower() for kw in ["[music]", "[applause]", "[silence]", "(music)", "(applause)"]):
+            continue
+        filtered_segments.append((seg["start"], text))
+
+    with open(csv_path, "w", newline="") as csvfile:
+        writer = csv.writer(csvfile)
+        writer.writerow(["timestamp", "text"])
+        for start_time, text in filtered_segments:
+            writer.writerow([f"{start_time:.2f}", text])
+
+    print(f"✅ Wrote {len(filtered_segments)} lyric lines to {csv_path}")
+
+# ---------- main ----------
+
 def main():
-    p = argparse.ArgumentParser()
-    p.add_argument("--artist", required=True)
-    p.add_argument("--title", required=True)
-    p.add_argument("--clear-cache", action="store_true")
-    p.add_argument("--final", action="store_true")
-    p.add_argument("--vocals-percent", type=float, default=0.0)
-    a = p.parse_args()
+    a = argparse.ArgumentParser()
+    a.add_argument("--artist", required=True)
+    a.add_argument("--title", required=True)
+    a.add_argument("--vocals-percent", type=float, default=30.0)
+    args = a.parse_args()
 
-    artist_slug = sanitize_name(a.artist)
-    title_slug = sanitize_name(a.title)
-    song = Path("songs") / f"{artist_slug}_{title_slug}.mp3"
-    lyr = Path("lyrics") / f"{artist_slug}_{title_slug}.txt"
-    csv = Path("lyrics") / f"{artist_slug}_{title_slug}_synced.csv"
+    project_root = Path(__file__).resolve().parents[1]
+    print(f"🎤 Processing: {args.artist} — {args.title}")
 
-    print(f"\n🎤 Processing: {a.artist} — {a.title}")
-    print(f"  Lyrics: {lyr}\n  Audio: {song}\n  Cache: {'rebuild' if a.clear_cache else 'reuse'}")
+    lyrics_path = project_root / f"lyrics/{args.artist.replace(' ','_')}_{args.title.replace(' ','_')}.txt"
+    audio_path  = project_root / f"songs/{args.artist.replace(' ','_')}_{args.title.replace(' ','_')}.mp3"
 
-    vocals = separate_vocals(song, a.clear_cache)
-    transcript = transcribe_with_whisper(vocals, a.clear_cache)
-    align_lyrics_to_audio(lyr, transcript, csv)
-    if a.vocals_percent > 0: 
-        adjust_vocals_mix(vocals, song, a.vocals_percent)
-    print("\n✅ Auto-sync complete!")
+    stems_folder = find_stems_folder(project_root, args.artist, args.title)
+    vocals = stems_folder / "vocals.wav"
+    if not vocals.exists():
+        print("🎶 Step 1: Separating vocals with Demucs (fresh run)...")
+        run_with_progress([
+            "demucs", str(audio_path), "-n", "htdemucs_ft", "-o", "separated"
+        ], "Demucs")
+    else:
+        print(f"🌀 Using cached Demucs output → {vocals}")
+
+    transcript_json = project_root / "lyrics/vocals.json"
+    if not transcript_json.exists():
+        print("🎧 Step 2: Transcribing vocals with Whisper...")
+        run_with_progress([
+            "whisper", str(vocals), "--model", "medium",
+            "--output_dir", "lyrics", "--output_format", "json"
+        ], "Whisper")
+    else:
+        print(f"🌀 Using cached Whisper transcript → {transcript_json}")
+
+    # Step 3 — Convert Whisper JSON → synced CSV (filtered)
+    synced_csv = project_root / f"lyrics/{args.artist.replace(' ','_')}_{args.title.replace(' ','_')}_synced.csv"
+    extract_timestamps_from_whisper(transcript_json, synced_csv)
+
+    # Step 4 — Mix vocals into instrumental
+    mixed_mp3 = adjust_vocals_mix(vocals, audio_path, args.vocals_percent)
+
+    # Step 5 — Generate karaoke MP4
+    print("🎬 Rendering final karaoke video...")
+    run_with_progress([
+        "python3",
+        str(project_root / "scripts/karaoke_core.py"),
+        "--csv", str(synced_csv),
+        "--mp3", str(audio_path),
+        "--font-size", "140"
+    ], "Karaoke Render")
+
+    print("✅ Auto-sync complete! 🎉")
 
 if __name__ == "__main__":
     main()
