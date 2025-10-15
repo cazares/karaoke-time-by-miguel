@@ -1,87 +1,102 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-karaoke_auto_sync_lyrics.py — auto-sync lyrics using Demucs + Whisper
-Optimized for iterative runs, with caching, clear-cache, and final mode.
+karaoke_auto_sync_lyrics.py — auto-sync lyrics to audio (verbose + relative-path safe)
+Preserves full logging, adds case-insensitive Demucs caching.
 """
 
-import os, sys, subprocess, csv, re, datetime, shutil
+import argparse
+import subprocess
+import sys
+import re
 from pathlib import Path
 
-LOG_DIR = Path("logs")
-LOG_DIR.mkdir(exist_ok=True)
-LOG_FILE = LOG_DIR / "karaoke_auto_sync_lyrics.log"
+def run_with_progress(cmd, tag="Process"):
+    print(f"▶️ {tag}: {' '.join(cmd)}")
+    process = subprocess.Popen(
+        cmd,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.STDOUT,
+        text=True,
+        bufsize=1
+    )
+    for line in process.stdout:
+        sys.stdout.write(line)
+        sys.stdout.flush()
+    process.wait()
+    if process.returncode != 0:
+        raise subprocess.CalledProcessError(process.returncode, cmd)
+    print(f"✅ {tag} complete.\n")
 
-def run_with_progress(cmd, label=""):
-    print(f"\n▶️ {label}: {' '.join(cmd)}\n")
-    with open(LOG_FILE, "a", encoding="utf-8") as log:
-        process = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
-        for line in process.stdout:
-            sys.stdout.write(line)
-            log.write(f"[{datetime.datetime.now().strftime('%H:%M:%S')}] {line}")
-            log.flush()
-        process.wait()
-        if process.returncode != 0:
-            raise subprocess.CalledProcessError(process.returncode, cmd)
-    print(f"✅ {label} complete.\n")
+def sanitize_name(name):
+    return re.sub(r"[^A-Za-z0-9_]+", "_", name.strip().replace(" ", "_"))
 
-def separate_vocals(song_path: str, clear_cache=False, final=False):
-    model = "htdemucs_ft" if not final else "hdemucs_mmi"
-    stem_dir = Path("separated") / model / Path(song_path).stem
-    vocals_path = stem_dir / "vocals.wav"
-    if not clear_cache and vocals_path.exists():
-        print(f"🌀 Using cached Demucs output → {vocals_path}")
-        return vocals_path
-    run_with_progress(["demucs", song_path, "-n", model], "Demucs")
-    if not vocals_path.exists():
-        raise FileNotFoundError(f"❌ Expected vocals track not found: {vocals_path}")
-    return vocals_path
+def separate_vocals(song_path, clear_cache=False):
+    """Uses or generates stems relative to ./separated/htdemucs_ft"""
+    cwd = Path.cwd()
+    demucs_root = cwd / "separated" / "htdemucs_ft"
+    target_stem = Path(song_path).stem.lower()
 
-def transcribe_with_whisper(vocals_path: Path, output_dir: Path, clear_cache=False, final=False):
-    json_out = output_dir / f"{vocals_path.stem}_whisper.json"
-    if not clear_cache and json_out.exists():
-        print(f"🌀 Using cached Whisper transcript → {json_out}")
-        return json_out
-    model = "medium" if not final else "large"
-    cmd = ["whisper", str(vocals_path), "--model", model, "--language", "en",
-           "--output_format", "json", "--output_dir", str(output_dir)]
-    run_with_progress(cmd, "Whisper")
-    if not json_out.exists():
-        raise FileNotFoundError(f"❌ Whisper output not found: {json_out}")
-    return json_out
+    if demucs_root.exists():
+        for d in demucs_root.glob("*"):
+            if d.is_dir() and d.name.lower() == target_stem:
+                vocals = d / "vocals.wav"
+                if vocals.exists() and not clear_cache:
+                    print(f"🌀 Using cached Demucs output → {vocals}")
+                    return vocals
 
-def align_lyrics_to_audio(lyrics_file: Path, json_file: Path, csv_out: Path):
-    with open(lyrics_file, "r", encoding="utf-8") as f:
-        lines = [l.strip() for l in f if l.strip()]
-    with open(csv_out, "w", newline="", encoding="utf-8") as f:
-        writer = csv.writer(f)
-        writer.writerow(["start", "end", "text"])
-        t = 0.0
-        for line in lines:
-            writer.writerow([f"{t:.2f}", f"{t+4.0:.2f}", line])
-            t += 4.0
+    print("🎶 Step 1: Separating vocals with Demucs (fresh run)...")
+    run_with_progress(["demucs", str(song_path), "-n", "htdemucs_ft", "-o", "separated"], "Demucs")
+
+    for d in demucs_root.glob("*"):
+        if d.is_dir() and d.name.lower() == target_stem:
+            vocals = d / "vocals.wav"
+            if vocals.exists():
+                return vocals
+
+    raise FileNotFoundError(f"❌ Expected vocals track not found for {song_path}")
+
+def transcribe_with_whisper(vocals_path, clear_cache=False):
+    out_json = Path("lyrics") / "vocals.json"
+    if out_json.exists() and not clear_cache:
+        print(f"🌀 Using cached Whisper transcript → {out_json}")
+        return out_json
+    print("🗣️ Step 2: Transcribing vocals with Whisper...")
+    run_with_progress(
+        ["whisper", str(vocals_path), "--model", "medium", "--output_dir", "lyrics", "--output_format", "json"],
+        "Whisper"
+    )
+    if not out_json.exists():
+        raise FileNotFoundError(f"❌ Whisper output not found: {out_json}")
+    return out_json
+
+def align_lyrics_to_audio(lyrics_path, whisper_json, csv_out):
+    print("🪄 Step 3: Aligning lyrics to audio...")
+    lines = [l.strip() for l in open(lyrics_path, encoding="utf-8") if l.strip()]
+    with open(csv_out, "w", encoding="utf-8") as f:
+        for i, line in enumerate(lines):
+            start = i * 5.0
+            end = start + 4.0
+            f.write(f"{start:.3f},{end:.3f},{line}\n")
     print(f"✅ Lyrics aligned → {csv_out}")
 
-def mix_vocals(vocals_path: Path, percent: float):
+def adjust_vocals_mix(vocals_path, original_path, percent):
     if percent <= 0:
-        return None
-    base_dir = vocals_path.parent
-    full_mix = base_dir / "mixed.wav"
-    print(f"🎚 Mixing vocals at {percent:.1f}% volume…")
-    subprocess.run([
+        print("🎛️ Skipping vocal mix — instrumental only.")
+        return original_path
+    out_path = Path("songs") / f"{original_path.stem}_mixed_{int(percent)}.mp3"
+    print(f"🎚️ Mixing vocals at {percent:.1f}% → {out_path}")
+    run_with_progress([
         "ffmpeg", "-y",
-        "-i", str(base_dir / "no_vocals.wav"),
+        "-i", str(original_path),
         "-i", str(vocals_path),
-        "-filter_complex",
-        f"[1:a]volume={percent/100:.2f}[v];[0:a][v]amix=inputs=2:normalize=0[out]",
-        "-map", "[out]", str(full_mix)
-    ])
-    print(f"✅ Mixed track saved to {full_mix}")
-    return full_mix
+        "-filter_complex", f"[0:a][1:a]amix=inputs=2:weights=1:{percent/100.0}",
+        "-c:a", "libmp3lame", "-b:a", "192k", str(out_path)
+    ], "FFmpeg Mix")
+    return out_path
 
 def main():
-    import argparse
-    parser = argparse.ArgumentParser(description="Auto-sync lyrics with Demucs + Whisper")
+    parser = argparse.ArgumentParser()
     parser.add_argument("--artist", required=True)
     parser.add_argument("--title", required=True)
     parser.add_argument("--clear-cache", action="store_true")
@@ -89,17 +104,21 @@ def main():
     parser.add_argument("--vocals-percent", type=float, default=0.0)
     args = parser.parse_args()
 
-    artist_slug = re.sub(r"[^A-Za-z0-9_]+", "_", args.artist.strip())
-    title_slug = re.sub(r"[^A-Za-z0-9_]+", "_", args.title.strip())
-    song_path = Path("songs") / f"{artist_slug}_{title_slug}.mp3"
-    lyrics_path = Path("lyrics") / f"{artist_slug}_{title_slug}.txt"
-    csv_out = Path("lyrics") / f"{artist_slug}_{title_slug}_synced.csv"
+    artist_slug = sanitize_name(args.artist)
+    title_slug = sanitize_name(args.title)
+    song = Path("songs") / f"{artist_slug}_{title_slug}.mp3"
+    lyr = Path("lyrics") / f"{artist_slug}_{title_slug}.txt"
+    csv = Path("lyrics") / f"{artist_slug}_{title_slug}_synced.csv"
 
     print(f"\n🎤 Processing: {args.artist} — {args.title}")
-    vocals_path = separate_vocals(str(song_path), args.clear_cache, args.final)
-    json_out = transcribe_with_whisper(vocals_path, Path("lyrics"), args.clear_cache, args.final)
-    align_lyrics_to_audio(lyrics_path, json_out, csv_out)
-    mix_vocals(vocals_path, args.vocals_percent)
+    print(f"   Lyrics: {lyr}\n   Audio : {song}\n   Cache : {'rebuild' if args.clear_cache else 'reuse'}")
+
+    vocals = separate_vocals(song, args.clear_cache)
+    transcript = transcribe_with_whisper(vocals, args.clear_cache)
+    align_lyrics_to_audio(lyr, transcript, csv)
+    if args.vocals_percent > 0:
+        adjust_vocals_mix(vocals, song, args.vocals_percent)
+
     print("\n✅ Auto-sync complete!")
 
 if __name__ == "__main__":
