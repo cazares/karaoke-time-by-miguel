@@ -6,7 +6,7 @@ Replace the text in a Whisper-generated timestamped CSV with lyrics fetched from
 preserving Whisper's timestamps. Uses fuzzy matching (difflib) to align lines where counts differ.
 
 Usage:
-    python3 override_lyrics_with_genius.py \
+    python3 scripts/override_lyrics_with_genius.py \
       --whisper ./lyrics/song_synced.csv \
       --genius ./lyrics/song_genius.txt \
       --out ./lyrics/song_synced_genius.csv

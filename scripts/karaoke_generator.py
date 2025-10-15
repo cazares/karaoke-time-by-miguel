@@ -105,6 +105,7 @@ def main():
     mp3_out = Path("songs") / f"{artist_slug}_{title_slug}.mp3"
     lyrics_path = Path("lyrics") / f"{artist_slug}_{title_slug}.txt"
     csv_path = Path("lyrics") / f"{artist_slug}_{title_slug}_synced.csv"
+    genius_csv_out = Path("lyrics") / f"{artist_slug}_{title_slug}_synced_genius.csv"
 
     print("🔎 Fetching YouTube URL automatically…")
     youtube_url = args.youtube_url or fetch_youtube_url(args.youtube_api_key, args.artist, args.title)
@@ -147,8 +148,27 @@ def main():
 
     run(cmd)
 
+    # 🎙️ NEW: override Whisper text with Genius lyrics, keep timings
+    try:
+        if csv_path.exists() and lyrics_path.exists():
+            print("🎙️ Overriding Whisper text with Genius lyrics (keeping timings)…")
+            run(
+                f'python3 scripts/override_lyrics_with_genius.py '
+                f'--whisper "{csv_path}" '
+                f'--genius "{lyrics_path}" '
+                f'--out "{genius_csv_out}" '
+                f'--min-similarity 0.35'
+            )
+            final_csv = genius_csv_out
+        else:
+            print("⚠️ Missing Whisper CSV or Genius TXT — skipping override.")
+            final_csv = csv_path
+    except Exception as e:
+        print(f"⚠️ Genius override skipped due to error: {e}")
+        final_csv = csv_path
+
     if args.run_all:
-        run(f'python3 scripts/karaoke_time.py --csv "{csv_path}" --mp3 "{mp3_out}" --offset {args.offset}')
+        run(f'python3 scripts/karaoke_time.py --csv "{final_csv}" --mp3 "{mp3_out}" --offset {args.offset}')
 
     print("\n✅ Karaoke generation complete!")
 
