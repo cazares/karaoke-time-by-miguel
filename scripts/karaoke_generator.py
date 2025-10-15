@@ -2,7 +2,10 @@
 # -*- coding: utf-8 -*-
 """
 karaoke_generator.py — unified entrypoint for Karaoke Time
-Stable build: same as last known good + added support for --font-size and artist/title forwarding.
+Stable build + ✅ new --max-seconds flag:
+ - Trims MP3 to first N seconds before full processing chain
+ - Applies to all steps (Demucs, Whisper, render)
+ - Reuses cached full MP3 if flag not set
 """
 
 import argparse, os, sys, subprocess, shlex, re
@@ -13,6 +16,7 @@ BASE_DIR = Path(__file__).resolve().parent.parent
 os.chdir(BASE_DIR)
 DEFAULT_OUTPUT_DIR = Path("songs")
 
+# ---------------------------------------------------------------------
 def warn_if_hardcoded_keys(script_path: str):
     try:
         with open(script_path, "r", encoding="utf-8") as f:
@@ -22,33 +26,31 @@ def warn_if_hardcoded_keys(script_path: str):
     except Exception:
         pass
 
+# ---------------------------------------------------------------------
 def run(cmd, debug: bool = True):
     log_dir = Path("logs")
     log_dir.mkdir(exist_ok=True)
     log_file = log_dir / "karaoke_generator.log"
-
     with open(log_file, "a", encoding="utf-8") as f:
         if isinstance(cmd, list):
             display_cmd = " ".join(shlex.quote(c) for c in cmd)
         else:
             display_cmd = cmd
             cmd = shlex.split(cmd)
-
         safe_cmd = re.sub(r'(--genius-token|--youtube-key)\s+"[^"]+"', r'\1 "****"', display_cmd)
         print(f"\n▶️ {safe_cmd}")
         f.write(f"\n\n▶️ {safe_cmd}\n")
         f.flush()
-
         process = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, bufsize=1)
         for line in process.stdout:
             sys.stdout.write(line)
             f.write(line)
             f.flush()
         process.wait()
-
         if process.returncode != 0:
             raise subprocess.CalledProcessError(process.returncode, display_cmd)
 
+# ---------------------------------------------------------------------
 def sanitize_name(name: str) -> str:
     return re.sub(r"[^A-Za-z0-9_]+", "_", name.strip().replace(" ", "_"))
 
@@ -73,6 +75,25 @@ def fetch_youtube_url(api_key: str, artist: str, title: str) -> str:
         print(f"[WARN] fetch_youtube_url.py failed:\n{e.stdout or ''}\n{e.stderr or ''}")
         return None
 
+# ---------------------------------------------------------------------
+def maybe_trim_audio(mp3_path: Path, max_seconds: float) -> Path:
+    """Trim MP3 if max_seconds > 0, return new Path."""
+    if not max_seconds or max_seconds <= 0:
+        return mp3_path
+    trimmed = mp3_path.with_name(f"{mp3_path.stem}_preview.mp3")
+    if trimmed.exists():
+        print(f"🌀 Using cached preview audio: {trimmed}")
+        return trimmed
+    print(f"✂️  Trimming to first {max_seconds:.1f}s for quick debug…")
+    cmd = [
+        "ffmpeg", "-y", "-i", str(mp3_path),
+        "-t", str(max_seconds),
+        "-c", "copy", str(trimmed)
+    ]
+    subprocess.run(cmd, check=True)
+    return trimmed
+
+# ---------------------------------------------------------------------
 def main():
     parser = argparse.ArgumentParser(description="🎤 Karaoke Time — auto lyrics & video generator")
     parser.add_argument("--artist", required=True)
@@ -87,7 +108,8 @@ def main():
     parser.add_argument("--final", action="store_true", help="Full-quality mode (slower)")
     parser.add_argument("--clear-cache", action="store_true", help="Force rerun of Demucs/Whisper cache")
     parser.add_argument("--run-all", action="store_true", help="Run full chain through MP4 render")
-    parser.add_argument("--font-size", type=int, default=140, help="Font size for final subtitles")  # ✅ minimal addition
+    parser.add_argument("--font-size", type=int, default=140, help="Font size for final subtitles")
+    parser.add_argument("--max-seconds", type=float, default=0.0, help="Limit processing to first N seconds (debug fast)")
     args = parser.parse_args()
 
     args.youtube_api_key = args.youtube_api_key or os.getenv("YT_KEY")
@@ -123,6 +145,9 @@ def main():
     else:
         print(f"🌀 Cached MP3: {mp3_out}")
 
+    # 🧩 Trim audio early if max-seconds requested
+    mp3_used = maybe_trim_audio(mp3_out, args.max_seconds)
+
     if not lyrics_path.exists() or args.clear_cache:
         run([
             "python3", "scripts/fetch_lyrics.py",
@@ -156,16 +181,17 @@ def main():
             f'--out "lyrics/{artist_slug}_{title_slug}_synced_genius.csv"'
         )
 
-        # ✅ minimal additive update: added artist/title/font-size passing
-        run(
+        # ✅ minimal additive update: added artist/title/font-size passing + max-seconds forward
+        cmd_render = (
             f'python3 scripts/karaoke_time.py '
             f'--csv "lyrics/{artist_slug}_{title_slug}_synced_genius.csv" '
-            f'--mp3 "{mp3_out}" '
+            f'--mp3 "{mp3_used}" '
             f'--artist "{args.artist}" '
             f'--title "{args.title}" '
             f'--offset {args.offset} '
             f'--font-size {args.font_size}'
         )
+        run(cmd_render)
 
     print("\n✅ Karaoke generation complete!")
 
